@@ -106,17 +106,21 @@ public class TestContentProvider {
 
     public static final String KEY_METADATA_YEAR = "Year";
 
+    public static final String KEY_METADATA_ALBUMART = "AlbumArt";
+
+    public static final String KEY_METADATA_SONY_MOBILE_CAMERA_CONTENT_FLAG = "CameraContent";
+
     private static final String PATH_TO_TESTFILE = Environment.getExternalStorageDirectory()
             .getAbsolutePath() + "/testcontent.xml";
 
     private static final String TAG = "TestContentProvider";
 
-    private ArrayList<TestContent> mContents;
+    private final ArrayList<TestContent> mContents;
 
-    private Context mContext;
+    private final Context mContext;
 
     public TestContentProvider(Context context) {
-        mContents = new ArrayList<TestContent>();
+        mContents = new ArrayList<>();
         mContext = context;
         loadContents();
     }
@@ -167,7 +171,7 @@ public class TestContentProvider {
 
     private String getMediaStoreUri(String idName) {
 
-        if (!idName.equals("") && mContext != null) {
+        if (!idName.isEmpty() && mContext != null) {
             ContentResolver cr = mContext.getContentResolver();
             Cursor c = cr.query(Media.EXTERNAL_CONTENT_URI, null, Media.DISPLAY_NAME
                     + "=? COLLATE NOCASE",
@@ -434,6 +438,15 @@ public class TestContentProvider {
                                 obj.setMetaDataValue(MetaData.KEY_YEAR, parser.getText());
                             }
                         } // done with KEY_YEAR
+                        else if (KEY_METADATA_SONY_MOBILE_CAMERA_CONTENT_FLAG.equals(
+                                parser.getName()) &&
+                                parser.getEventType() == XmlPullParser.START_TAG) {
+                            parser.next();
+                            if (parser.getEventType() == XmlPullParser.TEXT) {
+                                obj.setMetaDataValue(MetaData.KEY_IS_CAMERA_CONTENT,
+                                        parser.getText());
+                            }
+                        } // done with KEY_YEAR
                         else if (KEY_CONTENT_TYPE.equals(parser.getName()) &&
                                 parser.getEventType() == XmlPullParser.START_TAG) {
                             parser.next();
@@ -448,6 +461,26 @@ public class TestContentProvider {
                                 obj.setProtocolType(parser.getText());
                             }
                         } // done with protocol type
+                        else if (KEY_METADATA_ALBUMART.equals(parser.getName()) &&
+                                parser.getEventType() == XmlPullParser.START_TAG) {
+                            parser.next();
+                            if (parser.getEventType() == XmlPullParser.TEXT) {
+                                String text = parser.getText();
+                                int widthIndex = text.indexOf('w');
+                                int heightIndex = text.indexOf('h');
+                                if (text.startsWith("s") && widthIndex > -1 && heightIndex > -1) {
+                                    obj.setAlbumArtSize(Integer.parseInt(text.substring(1,
+                                            widthIndex)));
+                                    obj.setAlbumArtWidth(Integer.parseInt(text.substring
+                                            (widthIndex + 1, heightIndex)));
+                                    obj.setAlbumArtHeight(Integer.parseInt(text.substring
+                                            (heightIndex + 1)));
+                                } else {
+                                    Log.d(TAG, "No valid albumart data provided: \"" +
+                                            text + "\". Use format s[0-9]+w[0-9]+h[0-9]+");
+                                }
+                            }
+                        } // done with album art
                         else {
                             // No match for tags, do nothing
                         }

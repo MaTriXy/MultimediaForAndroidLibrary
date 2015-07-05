@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -34,7 +34,7 @@ public class DASHISOParser extends ISOBMFFParser {
 
     private static final String TAG = "DASHISOParser";
 
-    protected static final int sBoxIdSidx = fourCC('s', 'i', 'd', 'x');
+    private static final int sBoxIdSidx = fourCC('s', 'i', 'd', 'x');
 
     private ArrayList<SubSegment> mSegmentIndex;
 
@@ -55,7 +55,7 @@ public class DASHISOParser extends ISOBMFFParser {
     private byte[] mTkhd;
 
     public DASHISOParser() {
-        super((DataSource)null);
+        super(null);
 
         initParsing();
     }
@@ -97,16 +97,15 @@ public class DASHISOParser extends ISOBMFFParser {
 
         try {
             long sourceLength = mDataSource.length();
-            boolean parseOK = true;
 
-            while (mCurrentOffset < sourceLength && parseOK) {
+            while (mCurrentOffset < sourceLength) {
                 BoxHeader header = getNextBoxHeader();
                 if (header == null) {
                     break;
                 } else if (header.boxType == sBoxIdSidx) {
                     mSidxSize = header.boxDataSize;
                     source.setRange(header.startOffset, header.boxHeaderSize + header.boxDataSize);
-                    mSegmentIndex = new ArrayList<DASHISOParser.SubSegment>();
+                    mSegmentIndex = new ArrayList<>();
                     return parseSegmentIndex(header);
                 } else {
                     int err = parseBox12(header);
@@ -156,7 +155,7 @@ public class DASHISOParser extends ISOBMFFParser {
             } else if (header.boxType == sBoxIdSidx) {
                 mSidxSize = header.boxDataSize;
                 source.setRange(header.startOffset, header.boxHeaderSize + header.boxDataSize);
-                mSegmentIndex = new ArrayList<DASHISOParser.SubSegment>();
+                mSegmentIndex = new ArrayList<>();
 
                 return parseSegmentIndex(header);
             } else {
@@ -213,6 +212,9 @@ public class DASHISOParser extends ISOBMFFParser {
 
     @Override
     protected boolean parseBox(BoxHeader header) {
+        if (header == null) {
+            return false;
+        }
         if (header.boxType == BOX_ID_SUBS) {
             int boxSize = (int)(header.boxHeaderSize + header.boxDataSize);
             mSubs = new byte[(int)(header.boxHeaderSize + header.boxDataSize)];
@@ -254,7 +256,7 @@ public class DASHISOParser extends ISOBMFFParser {
             return ERROR;
         }
 
-        int versionFlags = 0;
+        int versionFlags;
         try {
             versionFlags = mDataSource.readInt();
             int version = versionFlags >> 24;
@@ -286,7 +288,7 @@ public class DASHISOParser extends ISOBMFFParser {
                 referenceSize = referenceSize & 0x7fffffff;
                 if (referenceType == 1) {
                     if (subSidxOffsets == null) {
-                        subSidxOffsets = new ArrayList<Long>(referenceCount);
+                        subSidxOffsets = new ArrayList<>(referenceCount);
                     }
 
                     subSidxOffsets.add(offset);
@@ -325,15 +327,17 @@ public class DASHISOParser extends ISOBMFFParser {
                     int err = parseSegmentIndex(boxHeader);
 
                     if (err != OK) {
+                        if (LOGS_ENABLED) Log.e(TAG, "failed to get next sidx at " + mCurrentOffset
+                                + ", err: " + err);
                         return err;
                     }
                 }
             }
 
         } catch (EOFException e) {
-            if (LOGS_ENABLED) Log.e(TAG, "EOFException while parsing 'mvhd' box", e);
+            if (LOGS_ENABLED) Log.e(TAG, "EOFException while parsing 'sidx' box", e);
         } catch (IOException e) {
-            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'mvhd' box", e);
+            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'sidx' box", e);
         }
         mCurrentOffset += header.boxDataSize;
 

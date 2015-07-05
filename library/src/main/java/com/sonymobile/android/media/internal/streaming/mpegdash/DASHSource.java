@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import android.media.MediaFormat;
 import android.os.Handler;
@@ -30,8 +30,10 @@ import com.sonymobile.android.media.TrackInfo.TrackType;
 import com.sonymobile.android.media.internal.AccessUnit;
 import com.sonymobile.android.media.internal.Configuration;
 import com.sonymobile.android.media.internal.MediaSource;
+import com.sonymobile.android.media.internal.MimeType;
 
 import java.lang.ref.WeakReference;
+import java.net.HttpURLConnection;
 import java.util.Vector;
 
 public class DASHSource extends MediaSource {
@@ -56,6 +58,8 @@ public class DASHSource extends MediaSource {
 
     private String mUrl;
 
+    private HttpURLConnection mUrlConnection;
+
     private DASHSession mSession;
 
     private EventHandler mEventHandler;
@@ -64,22 +68,34 @@ public class DASHSource extends MediaSource {
 
     private RepresentationSelector mRepresentationSelector = null;
 
-    private int mMaxBufferSize;
+    private final int mMaxBufferSize;
 
     public DASHSource(String url, Handler notify, int maxBufferSize) {
         super(notify);
 
         mUrl = url;
         mMaxBufferSize = maxBufferSize;
+
+        if (url.startsWith("vuabs://")
+                || url.startsWith("vuabss://")) {
+            mUrl = url.replaceFirst("vuabs", "http");
+        }
+    }
+
+    public DASHSource(HttpURLConnection urlConnection, Handler notify, int maxBufferSize) {
+        super(notify);
+
+        mUrlConnection = urlConnection;
+        mMaxBufferSize = maxBufferSize;
     }
 
     @Override
     public void prepareAsync() {
-        mEventHandler = new EventHandler(new WeakReference<DASHSource>(this));
+        mEventHandler = new EventHandler(new WeakReference<>(this));
 
         mSession = new DASHSession(mEventHandler, mBandwidthEstimator, mRepresentationSelector,
                 mMaxBufferSize);
-        mSession.connect(mUrl);
+        mSession.connect(mUrl, mUrlConnection);
     }
 
     @Override
@@ -125,7 +141,7 @@ public class DASHSource extends MediaSource {
 
     private static class EventHandler extends Handler {
 
-        private WeakReference<DASHSource> mSource;
+        private final WeakReference<DASHSource> mSource;
 
         public EventHandler(WeakReference<DASHSource> source) {
             super();
@@ -206,5 +222,21 @@ public class DASHSource extends MediaSource {
     @Override
     public Statistics getStatistics() {
         return mSession.getStatistics();
+    }
+
+    public static boolean canHandle(String uri) {
+        return uri.startsWith("vuabs://") || uri.startsWith("vuabss://");
+    }
+
+    public static boolean canHandle(String mime, String uri) {
+        if (mime.equalsIgnoreCase(MimeType.MPEG_DASH)) {
+            return true;
+        }
+
+        if (uri.endsWith(".mpd") || uri.indexOf(".mpd?") > 0) {
+            return true;
+        }
+
+        return false;
     }
 }

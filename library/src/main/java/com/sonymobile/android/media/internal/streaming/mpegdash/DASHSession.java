@@ -14,14 +14,14 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.Map;
 import java.util.Vector;
 
@@ -45,9 +45,11 @@ import com.sonymobile.android.media.internal.AccessUnit;
 import com.sonymobile.android.media.internal.Configuration;
 import com.sonymobile.android.media.internal.MetaDataImpl;
 import com.sonymobile.android.media.internal.MimeType;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.ContentProtection;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.Period;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.Representation;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.ContentProtection;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Period;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Representation;
+import com.sonymobile.android.media.internal.streaming.common.DefaultBandwidthEstimator;
+import com.sonymobile.android.media.internal.streaming.common.PacketSource;
 
 public final class DASHSession {
 
@@ -61,6 +63,14 @@ public final class DASHSession {
 
     private static final int MSG_FETCHER_CALLBACK = 2;
 
+    private static final int MSG_CHANGE_CONFIGURATION = 3;
+
+    private static final int MSG_SEEK = 4;
+
+    private static final int MSG_DISCONNECT = 5;
+
+    private static final int MSG_SELECT_TRACK = 6;
+
     public static final int FETCHER_EOS = 0;
 
     public static final int FETCHER_ERROR = 1;
@@ -71,14 +81,6 @@ public final class DASHSession {
 
     public static final int FETCHER_UPDATE_STATISTICS = 4;
 
-    private static final int MSG_CHANGE_CONFIGURATION = 3;
-
-    private static final int MSG_SEEK = 4;
-
-    private static final int MSG_DISCONNECT = 5;
-
-    private static final int MSG_SELECT_TRACK = 6;
-
     public static final String KEY_TIMEUS = "timeus";
 
     public static final String KEY_REMOTE_IP = "remoteIP";
@@ -87,19 +89,19 @@ public final class DASHSession {
 
     private static final int MAX_BUFFER_DURATION_US = 10000000;
 
-    private HandlerThread mEventThread;
+    private final HandlerThread mEventThread;
 
-    private EventHandler mEventHandler;
+    private final EventHandler mEventHandler;
 
-    private Handler mCallbackHandler;
+    private final Handler mCallbackHandler;
 
     private MPDParser mMPDParser;
 
     private boolean mBuffering = true;
 
-    private HashMap<TrackInfo.TrackType, RepresentationFetcher> mFetchers = new HashMap<TrackInfo.TrackType, RepresentationFetcher>();
+    private final EnumMap<TrackType, RepresentationFetcher> mFetchers = new EnumMap<>(TrackType.class);
 
-    private HashMap<TrackInfo.TrackType, PacketSource> mPacketSources = new HashMap<TrackInfo.TrackType, PacketSource>();
+    private final EnumMap<TrackType, PacketSource> mPacketSources = new EnumMap<>(TrackType.class);
 
     private BandwidthEstimator mBandwidthEstimator;
 
@@ -107,7 +109,7 @@ public final class DASHSession {
 
     private long mLastDequeuedTimeUs;
 
-    private MetaDataImpl mMetaData = new MetaDataImpl();
+    private final MetaDataImpl mMetaData = new MetaDataImpl();
 
     private boolean mSeekPending = false;
 
@@ -115,9 +117,9 @@ public final class DASHSession {
 
     private String mVideoURI;
 
-    private int mMaxBufferSize;
+    private final int mMaxBufferSize;
 
-    private int[] mMaxBufferSizes;
+    private final int[] mMaxBufferSizes;
 
     public DASHSession(Handler callbackHandler, BandwidthEstimator estimator,
             RepresentationSelector selector, int maxBufferSize) {
@@ -127,7 +129,7 @@ public final class DASHSession {
         mEventThread = new HandlerThread("DASH");
         mEventThread.start();
 
-        mEventHandler = new EventHandler(new WeakReference<DASHSession>(this),
+        mEventHandler = new EventHandler(new WeakReference<>(this),
                 mEventThread.getLooper());
 
         mPacketSources.put(TrackType.AUDIO, new PacketSource());
@@ -211,8 +213,9 @@ public final class DASHSession {
         return accessUnit;
     }
 
-    public void connect(String url) {
-        mEventHandler.obtainMessage(MSG_CONNECT, url).sendToTarget();
+    public void connect(String url, HttpURLConnection urlConnection) {
+        mEventHandler.obtainMessage(MSG_CONNECT,
+                urlConnection != null ? urlConnection : url).sendToTarget();
     }
 
     public MetaData getMetaData() {
@@ -225,7 +228,7 @@ public final class DASHSession {
 
     private static class EventHandler extends Handler {
 
-        private WeakReference<DASHSession> mSession;
+        private final WeakReference<DASHSession> mSession;
 
         public EventHandler(WeakReference<DASHSession> session, Looper looper) {
             super(looper);
@@ -316,13 +319,24 @@ public final class DASHSession {
                             break;
                         }
                         case FETCHER_ERROR: {
-                            if (LOGS_ENABLED) Log.e(TAG, "Fetcher reported error");
-                            PacketSource packetSource = thiz.mPacketSources.get(type);
+                            PacketSource audioPacketSource = thiz.mPacketSources.
+                                    get(TrackType.AUDIO);
+                            PacketSource videoPacketSource = thiz.mPacketSources.
+                                    get(TrackType.VIDEO);
 
-                            thiz.mCallbackHandler.obtainMessage(DASHSource.MSG_ERROR)
-                                    .sendToTarget();
-                            packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_ERROR);
-                            thiz.mFetchers.remove(type);
+                            boolean audioOnly = thiz.mMPDParser.
+                                    getRepresentation(TrackType.VIDEO) == null;
+
+                            if (!audioPacketSource.hasBufferAvailable() || (!audioOnly &&
+                                    !videoPacketSource.hasBufferAvailable())) {
+                                if (LOGS_ENABLED) Log.e(TAG, "Fetcher reported error");
+                                PacketSource packetSource = thiz.mPacketSources.get(type);
+                                thiz.mCallbackHandler.obtainMessage(DASHSource.MSG_ERROR)
+                                        .sendToTarget();
+                                packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_ERROR);
+                                thiz.mFetchers.remove(type);
+                            }
+
                             break;
                         }
                         case FETCHER_DRM_INFO: {
@@ -368,18 +382,25 @@ public final class DASHSession {
     private void onConnect(Message msg) {
         boolean success = false;
         int error = MediaError.UNKNOWN;
+        String uri;
+        HttpURLConnection urlConnection;
         try {
-            String uri = (String)msg.obj;
+            if (msg.obj instanceof HttpURLConnection) {
+                urlConnection = (HttpURLConnection)msg.obj;
+                uri = urlConnection.getURL().toString();
+            } else {
+                uri = (String)msg.obj;
+                URL url = new URL(uri);
+                urlConnection = (HttpURLConnection)url.openConnection();
+            }
             if (LOGS_ENABLED) Log.i(TAG, "onConnect " + uri);
-            URL url = new URL(uri);
-            HttpURLConnection urlConnection = (HttpURLConnection)url.openConnection();
 
             if (urlConnection.getResponseCode() / 100 == 2) {
 
                 mMPDParser = new MPDParser(uri);
 
                 if (mBandwidthEstimator == null) {
-                    mBandwidthEstimator = new DefaultDASHBandwidthEstimator();
+                    mBandwidthEstimator = new DefaultBandwidthEstimator();
                 }
 
                 if (mRepresentationSelector == null) {

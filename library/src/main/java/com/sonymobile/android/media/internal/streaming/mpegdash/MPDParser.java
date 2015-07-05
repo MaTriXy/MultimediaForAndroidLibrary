@@ -14,13 +14,14 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Vector;
@@ -39,6 +40,7 @@ import com.sonymobile.android.media.TrackRepresentation;
 import com.sonymobile.android.media.VideoTrackRepresentation;
 import com.sonymobile.android.media.internal.Configuration;
 import com.sonymobile.android.media.internal.Util;
+import com.sonymobile.android.media.internal.streaming.common.ParseException;
 
 public class MPDParser {
 
@@ -50,7 +52,7 @@ public class MPDParser {
 
     private long mMinBufferTimeUs;
 
-    private ArrayList<Period> mPeriods = new ArrayList<Period>();
+    private final ArrayList<Period> mPeriods = new ArrayList<>();
 
     private Period mCurrentPeriod;
 
@@ -106,18 +108,33 @@ public class MPDParser {
     public boolean parse(InputStream in) {
         boolean success = false;
 
-        byte[] buffer = new byte[1024];
-        int read;
+        byte[] buffer;
         try {
-            while ((read = in.read(buffer)) > 0) {
-                mMPDFile += new String(buffer, 0, read, "UTF-8");
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            buffer = new byte[1024];
+            int read = in.read(buffer);
+            while (read > 0) {
+                out.write(buffer, 0, read);
+                read = in.read(buffer);
             }
+
+            buffer = out.toByteArray();
+
+            Charset charSet = Charset.forName("UTF-8");
+            if ((buffer[0] == (byte) 0xff && buffer[1] == (byte) 0xfe) ||
+                    (buffer[0] == (byte) 0xfe && buffer[1] == (byte) 0xff)) {
+                charSet = Charset.forName("UTF-16");
+            }
+
+            mMPDFile = out.toString(charSet.name());
+
+            out.close();
         } catch (IOException e) {
             if (LOGS_ENABLED) Log.e(TAG, "Could not download MPD", e);
             return false;
         }
 
-        in = new ByteArrayInputStream(mMPDFile.getBytes(StandardCharsets.UTF_8));
+        in = new ByteArrayInputStream(buffer);
 
         XmlPullParser parser = Xml.newPullParser();
         try {
@@ -180,6 +197,9 @@ public class MPDParser {
             return false;
         } catch (IOException e) {
             if (LOGS_ENABLED) Log.e(TAG, "IOException during parse", e);
+            return false;
+        } catch (ParseException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "ParseException during parse", e);
             return false;
         }
 
@@ -271,12 +291,12 @@ public class MPDParser {
 
     private void endAdaptationSet() {
         if (mCurrentAdaptationSet.type == TrackType.UNKNOWN) {
-            if (mCurrentAdaptationSet.mime.indexOf("audio") > -1) {
+            if (mCurrentAdaptationSet.mime.contains("audio")) {
                 mCurrentAdaptationSet.type = TrackType.AUDIO;
-            } else if (mCurrentAdaptationSet.mime.indexOf("video") > -1) {
+            } else if (mCurrentAdaptationSet.mime.contains("video")) {
                 mCurrentAdaptationSet.type = TrackType.VIDEO;
-            } else if (mCurrentAdaptationSet.mime.indexOf("text") > -1
-                    || mCurrentAdaptationSet.mime.indexOf("image") > -1) {
+            } else if (mCurrentAdaptationSet.mime.contains("text")
+                    || mCurrentAdaptationSet.mime.contains("image")) {
                 mCurrentAdaptationSet.type = TrackType.SUBTITLE;
             }
         }
@@ -289,6 +309,13 @@ public class MPDParser {
                 && mCurrentPeriod.currentAdaptationSet[TrackType.VIDEO.ordinal()] == -1) {
             mCurrentPeriod.currentAdaptationSet[TrackType.VIDEO.ordinal()] =
                     mCurrentPeriod.adaptationSets.size();
+        }
+
+        for (Representation representation : mCurrentAdaptationSet.representations) {
+            if (representation.segmentTemplate == null &&
+                    representation.segmentBase == null) {
+                throw new ParseException("No SegmentTemplate or BaseURL found!");
+            }
         }
 
         mCurrentPeriod.adaptationSets.add(mCurrentAdaptationSet);
@@ -319,7 +346,7 @@ public class MPDParser {
             mContentProtection = new ContentProtection();
             uuid = uuid.substring(compare.length(), uuid.length());
             uuid = uuid.replace("-", "");
-            mContentProtection.uuid = Util.hexToBytes(uuid);
+            mContentProtection.uuid = Util.uuidStringToByteArray(uuid);
         }
     }
 
@@ -430,7 +457,7 @@ public class MPDParser {
         }
 
         if (template.segmentTimeline == null) {
-            template.segmentTimeline = new ArrayList<SegmentTimelineEntry>();
+            template.segmentTimeline = new ArrayList<>();
         }
 
         String time = parser.getAttributeValue(null, "t");
@@ -507,6 +534,7 @@ public class MPDParser {
 
         if (mCurrentRepresentation.segmentTemplate == null
                 && mCurrentRepresentation.segmentBase == null
+                && mCurrentRepresentation.baseURL != null
                 && mCurrentRepresentation.baseURL.length() > 0) {
             SegmentBase segmentBase = new SegmentBase();
 
@@ -554,10 +582,12 @@ public class MPDParser {
             mCurrentRepresentation.baseURL = parser.getText();
         } else if (mCurrentPeriod != null) {
             mCurrentPeriod.baseURL = parser.getText();
+        } else {
+            mBaseUri = parser.getText();
         }
     }
 
-    private long parseISO8601Duration(String value) {
+    private static long parseISO8601Duration(String value) {
         if (value == null) {
             return -1;
         }
@@ -575,7 +605,7 @@ public class MPDParser {
         while (offset < value.length()) {
             switch (value.charAt(offset)) {
                 case 'Y':
-                    durationUs += Long.parseLong(value.substring(start, offset)) * 12 * 30 * 24
+                    durationUs += Long.parseLong(value.substring(start, offset)) * 365 * 24
                             * 60 * 60 * 1000000L;
                     start = offset + 1;
                     break;
@@ -634,7 +664,7 @@ public class MPDParser {
         return durationUs;
     }
 
-    private float parseFrameRate(String value) {
+    private static float parseFrameRate(String value) {
         try {
             int index = value.indexOf('/');
             if (index < 0) {
@@ -656,7 +686,7 @@ public class MPDParser {
         }
     }
 
-    private int parseChannelConfiguration(String value) {
+    private static int parseChannelConfiguration(String value) {
         try {
             int channelCount = Integer.parseInt(value);
             if (channelCount == 7) { // Front L/R/C, Middle L/R,
@@ -693,10 +723,6 @@ public class MPDParser {
             for (int j = 0; j < numAdaptationSets; j++) {
                 AdaptationSet adaptationSet = period.adaptationSets.get(j);
                 TrackType trackType = adaptationSet.type;
-
-                DASHTrackInfo trackInfo = new DASHTrackInfo(trackType, adaptationSet.mime,
-                        period.durationUs, adaptationSet.language, period.startTimeUs,
-                        adaptationSet.accessibility, adaptationSet.role, adaptationSet.rating);
 
                 int numRepresentations = adaptationSet.representations.size();
                 TrackRepresentation[] trackRepresentations =
@@ -736,8 +762,10 @@ public class MPDParser {
                     trackRepresentations[k] = trackRepresentation;
                 }
 
-                trackInfo.setRepresentations(trackRepresentations);
-                trackInfos[trackIndex] = trackInfo;
+                trackInfos[trackIndex] = new DASHTrackInfo(trackType, adaptationSet.mime,
+                        period.durationUs, adaptationSet.language, trackRepresentations,
+                        period.startTimeUs, adaptationSet.accessibility, adaptationSet.role,
+                        adaptationSet.rating);
                 trackIndex++;
             }
         }
@@ -757,23 +785,8 @@ public class MPDParser {
         }
     }
 
-    public boolean canSelectOrDeselectTrack(int index, boolean select) {
-        int numPeriods = mPeriods.size();
-
-        int totalTracks = 0;
-        for (int i = 0; i < numPeriods; i++) {
-            totalTracks += mPeriods.get(i).adaptationSets.size();
-        }
-
-        if (index < 0 || index >= totalTracks) {
-            return false;
-        }
-
-        return true;
-    }
-
     public TrackType selectTrack(boolean select, int index) {
-        Period period = null;
+        Period period;
         int trackCount = 0;
 
         if (index < 0) {
@@ -927,7 +940,7 @@ public class MPDParser {
     }
 
     public void selectRepresentations(int trackIndex, Vector<Integer> representations) {
-        Period period = null;
+        Period period;
         int trackCount = 0;
 
         if (trackIndex < 0) {
@@ -1039,9 +1052,9 @@ public class MPDParser {
 
         long startTimeUs;
 
-        ArrayList<AdaptationSet> adaptationSets = new ArrayList<AdaptationSet>();
+        final ArrayList<AdaptationSet> adaptationSets = new ArrayList<>();
 
-        int[] currentAdaptationSet = new int[TrackType.UNKNOWN.ordinal()];
+        final int[] currentAdaptationSet = new int[TrackType.UNKNOWN.ordinal()];
     }
 
     public static class AdaptationSet {
@@ -1071,7 +1084,7 @@ public class MPDParser {
 
         String audioChannelConfiguration;
 
-        ArrayList<Representation> representations = new ArrayList<Representation>();
+        final ArrayList<Representation> representations = new ArrayList<>();
     }
 
     public static class SegmentTemplate {

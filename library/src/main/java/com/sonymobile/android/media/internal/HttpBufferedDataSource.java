@@ -16,12 +16,11 @@
 
 package com.sonymobile.android.media.internal;
 
-import static com.sonymobile.android.media.internal.MediaSource.SOURCE_BUFFERING_END;
-import static com.sonymobile.android.media.internal.MediaSource.SOURCE_BUFFERING_START;
 import static com.sonymobile.android.media.internal.MediaSource.SOURCE_BUFFERING_UPDATE;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 
 import android.os.Handler;
 import android.util.Log;
@@ -76,14 +75,15 @@ public class HttpBufferedDataSource extends BufferedDataSource {
             Log.v(TAG, "Created HttpBufferedDataSource");
     }
 
+    public HttpBufferedDataSource(HttpURLConnection urlConnection, int bufferSize, Handler notify,
+                                  BandwidthEstimator bandwidthEstimator) throws IOException {
+        super(urlConnection, bufferSize, notify, bandwidthEstimator);
+    }
+
     @Override
-    public synchronized int readAt(long offset, byte[] buffer, int size) throws IOException {
+    public int readAt(long offset, byte[] buffer, int size) throws IOException {
         if (LOGS_ENABLED) Log.d(TAG, "readAt " + offset + ", " + size + " bytes"
                 + " mCurrentOffset: " + mCurrentOffset);
-
-        if (mConnectError != STATUS_OK) {
-            return mConnectError;
-        }
 
         checkConnectionAndStream();
 
@@ -108,22 +108,19 @@ public class HttpBufferedDataSource extends BufferedDataSource {
                 if (mBis.canDataFit((offset - mCurrentOffset) + size) &&
                         offset - mCurrentOffset < mBufferSize / 3) {
                     // Data will fit in the buffer and we need to wait for a buffer smaller than
-                    // 1/3 of the length. Send buffering start and wait here...
-                    sendMessage(SOURCE_BUFFERING_START);
+                    // 1/3 of the length.
                     Object waiterLock = new Object();
                     while (!mBis.canFastForward(offset - mCurrentOffset)) {
                         synchronized (waiterLock) {
                             try {
                                 waiterLock.wait(50);
                                 if (mBis.isStreamClosed()) {
-                                    sendMessage(SOURCE_BUFFERING_END);
                                     return -1;
                                 }
                             } catch (InterruptedException e) {
                             }
                         }
                     }
-                    sendMessage(SOURCE_BUFFERING_END);
                     mBis.fastForward(offset - mCurrentOffset);
                 } else {
                     mCurrentOffset = offset;
@@ -159,10 +156,14 @@ public class HttpBufferedDataSource extends BufferedDataSource {
             }
         } while (totalRead < size);
 
+        if (totalRead < size) {
+            throw new IOException("Not enough data read");
+        }
+
         return totalRead;
     }
 
-    protected synchronized void openConnectionsAndStreams()
+    protected void openConnectionsAndStreams()
             throws FileNotFoundException, IOException {
         super.openConnectionsAndStreams();
 
@@ -170,16 +171,7 @@ public class HttpBufferedDataSource extends BufferedDataSource {
     }
 
     @Override
-    protected void doReconnect() throws IOException {
-        super.doReconnect();
-    }
-
-    protected void doCloseAsync() {
-        super.doCloseAsync();
-    }
-
-    @Override
-    public synchronized DataAvailability hasDataAvailable(long offset, int size) {
+    public DataAvailability hasDataAvailable(long offset, int size) {
         if (mBis == null) {
             return DataAvailability.NOT_AVAILABLE;
         }
@@ -206,7 +198,7 @@ public class HttpBufferedDataSource extends BufferedDataSource {
     }
 
     @Override
-    public synchronized void requestReadPosition(long offset) throws IOException {
+    public void requestReadPosition(long offset) throws IOException {
         if (LOGS_ENABLED)
             Log.d(TAG, "Request reconnect now at " + offset);
 
@@ -220,6 +212,9 @@ public class HttpBufferedDataSource extends BufferedDataSource {
     public int getBuffering() {
         int percentage = 0;
         try {
+            if (mBis == null) {
+                return 0;
+            }
             int numBytesAvailable = mBis.available();
             percentage = (int)(100 * (double)(mCurrentOffset + numBytesAvailable)
                     / mContentLength);
@@ -229,14 +224,25 @@ public class HttpBufferedDataSource extends BufferedDataSource {
                 percentage = 0;
             }
         } catch (IOException e) {
-        } finally {
-            return percentage;
         }
+        return percentage;
+    }
+
+    public int getBufferedSize() {
+        try {
+            return mBis.available();
+        } catch (IOException e) {
+        }
+        return 0;
     }
 
     private void sendMessage(int what) {
         if (mNotify != null) {
             mNotify.sendEmptyMessage(what);
         }
+    }
+
+    public boolean isAtEndOfStream() {
+        return mBis == null || mBis.isAtEndOfStream();
     }
 }

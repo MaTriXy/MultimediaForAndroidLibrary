@@ -102,23 +102,23 @@ public final class AudioThread extends CodecThread implements Clock {
 
     private int mSampleRate;
 
-    private Handler mCallbacks;
+    private final Handler mCallbacks;
 
     private int mInputBuffer = -1;
 
     private long mAnchorTimeUs = -1;
 
-    public MediaCrypto mMediaCrypto;
+    private MediaCrypto mMediaCrypto;
 
     private long mStoredTimeUs = 0;
 
-    public int mAudioSessionId;
+    private int mAudioSessionId;
 
     private AudioTimestamp mAudioTimestamp;
 
     private Method mAudioTrackGetLatencyMethod;
 
-    private DrmSession mDrmSession;
+    private final DrmSession mDrmSession;
 
     private long mAudioTrackResumeSystemTimeUs;
 
@@ -134,11 +134,11 @@ public final class AudioThread extends CodecThread implements Clock {
 
     private boolean mDequeueInputErrorFlag = false;
 
-    private Object mRenderingLock = new Object();
+    private final Object mRenderingLock = new Object();
 
     private Method mSetAudioTrackMethod;
 
-    private HandlerHelper mHandlerHelper;
+    private final HandlerHelper mHandlerHelper;
 
     public AudioThread(MediaFormat format, MediaSource source, int audioSessionId,
             Handler callback, DrmSession drmSession) {
@@ -233,7 +233,7 @@ public final class AudioThread extends CodecThread implements Clock {
 
     private long getCurrentPlayPositionUs() {
         long systemClockUs = System.nanoTime() / 1000;
-        long playPositionUs = -1;
+        long playPositionUs;
 
         if (mAllDataRendered) {
             long timeDiffUs = systemClockUs - mLastTimeStampTimeUs;
@@ -264,7 +264,7 @@ public final class AudioThread extends CodecThread implements Clock {
 
     private long getAudioTimestampUs() {
         long systemClockUs = System.nanoTime() / 1000;
-        long currentTimeUs = -1;
+        long currentTimeUs;
         if (mAudioTimestamp == null) {
             mAudioTimestamp = new AudioTimestamp();
         }
@@ -334,7 +334,7 @@ public final class AudioThread extends CodecThread implements Clock {
         return mAudioSessionId;
     }
 
-    private int getAudioChannelConfiguration(int channelCount) {
+    private static int getAudioChannelConfiguration(int channelCount) {
         if (channelCount == 1) {
             return AudioFormat.CHANNEL_OUT_MONO;
         } else if (channelCount == 2) {
@@ -410,6 +410,17 @@ public final class AudioThread extends CodecThread implements Clock {
                 }
 
                 if (accessUnit.status == AccessUnit.OK) {
+                    if (mInputBuffers[inputBufferIndex].capacity() < accessUnit.size) {
+                        if (LOGS_ENABLED) {
+                            Log.e(TAG, "Input buffer too small " +
+                                    mInputBuffers[inputBufferIndex].capacity() +
+                                    " vs " + accessUnit.size);
+                        }
+                        mCallbacks.obtainMessage(MSG_CODEC_NOTIFY, CODEC_ERROR,
+                                MediaError.UNKNOWN).sendToTarget();
+                        return;
+                    }
+
                     mInputBuffers[inputBufferIndex].position(0);
                     mInputBuffers[inputBufferIndex].put(accessUnit.data, 0, accessUnit.size);
 
@@ -436,6 +447,9 @@ public final class AudioThread extends CodecThread implements Clock {
                 } else {
                     if (accessUnit.status == AccessUnit.ERROR) {
                         if (LOGS_ENABLED) Log.e(TAG, "queue ERROR");
+                        mDequeueInputErrorFlag = true;
+                    } else if (accessUnit.status == AccessUnit.FORMAT_CHANGED) {
+                        if (LOGS_ENABLED) Log.e(TAG, "Format changes is not supported for audio");
                         mDequeueInputErrorFlag = true;
                     }
                     if (mMediaCrypto != null) {
@@ -721,7 +735,9 @@ public final class AudioThread extends CodecThread implements Clock {
                 mAudioTrack.release();
                 mAudioTrack = null;
             }
-            mCodec.release();
+            if (mCodec != null) {
+                mCodec.release();
+            }
             if (mMediaCrypto != null && mDrmSession == null) {
                 // Only release the MediaCrypto object if not handled by a DRMSession.
                 mMediaCrypto.release();
@@ -807,6 +823,11 @@ public final class AudioThread extends CodecThread implements Clock {
 
                     frame = removeFirstDecodedFrame();
                     addFrameToPool(frame);
+
+                    try {
+                        mRenderingLock.wait(1);
+                    } catch (InterruptedException e) {
+                    }
                 } else {
                     // No frames available, let us wait....
                     try {

@@ -43,6 +43,7 @@ import java.io.EOFException;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 
 import android.os.Handler;
 import android.util.Log;
@@ -144,6 +145,15 @@ public abstract class DataSource implements Closeable {
         return new DirectDataSource(fd, offset, length);
     }
 
+    public static DataSource create(HttpURLConnection urlConnection, int bufferSize, Handler notify,
+                                    BandwidthEstimator bandwidthEstimator) throws IOException {
+        if (urlConnection == null) {
+            throw new IllegalArgumentException("Null urlConnection is not allowed!");
+        }
+
+        return new HttpBufferedDataSource(urlConnection, bufferSize, notify, bandwidthEstimator);
+    }
+
     protected BandwidthEstimator mBandwidthEstimator;
 
     public BandwidthEstimator getBandwidthEstimator() {
@@ -154,7 +164,7 @@ public abstract class DataSource implements Closeable {
         // Empty implementation, interested subclasses should override.
     }
 
-    public abstract void reset() throws IOException;
+    public abstract void reset();
 
     public abstract int readAt(long offset, byte[] buffer, int size) throws IOException;
 
@@ -192,16 +202,16 @@ public abstract class DataSource implements Closeable {
 
     protected long peekLong(byte[] src, int offset) {
         int h = ((src[offset++] & 0xff) << 24) | ((src[offset++] & 0xff) << 16)
-                | ((src[offset++] & 0xff) << 8) | ((src[offset++] & 0xff) << 0);
+                | ((src[offset++] & 0xff) << 8) | (src[offset++] & 0xff);
         int l = ((src[offset++] & 0xff) << 24) | ((src[offset++] & 0xff) << 16)
-                | ((src[offset++] & 0xff) << 8) | ((src[offset] & 0xff) << 0);
+                | ((src[offset++] & 0xff) << 8) | (src[offset] & 0xff);
         return (((long)h) << 32L) | ((long)l) & 0xffffffffL;
 
     }
 
     protected int peekInt(byte[] src, int offset) {
         return (((src[offset++] & 0xff) << 24) | ((src[offset++] & 0xff) << 16)
-                | ((src[offset++] & 0xff) << 8) | ((src[offset] & 0xff) << 0));
+                | ((src[offset++] & 0xff) << 8) | (src[offset] & 0xff));
     }
 
     protected short peekShort(byte[] src, int offset) {

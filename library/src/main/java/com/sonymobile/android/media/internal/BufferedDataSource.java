@@ -48,17 +48,11 @@ public abstract class BufferedDataSource extends DataSource {
 
     private static final String TAG = "BufferedDataSource";
 
-    protected static final int STATUS_OK = 0;
-
     protected static final int INT = 4;
 
     protected static final int LONG = 8;
 
     protected static final int SHORT = 2;
-
-    protected static final int TEN_KB = 10000;
-
-    protected static final int ONE_MB = 1000 * 1000;
 
     protected HttpURLConnection mHttpURLConnection;
 
@@ -74,15 +68,11 @@ public abstract class BufferedDataSource extends DataSource {
 
     protected String mUri = null;
 
-    protected int mConnectError = STATUS_OK;
-
     protected int mLength = -1;
 
     protected int mBufferSize = -1;
 
     protected String mServerIP = null;
-
-    protected long mStartOffset = 0;
 
     private Handler mReconnectHandler;
 
@@ -103,7 +93,6 @@ public abstract class BufferedDataSource extends DataSource {
         mBufferSize = bufferSize;
         mUri = uri;
         mCurrentOffset = mOffset;
-        mStartOffset = mOffset;
         mNotify = notify;
         mBandwidthEstimator = bandwidthEstimator;
 
@@ -115,6 +104,27 @@ public abstract class BufferedDataSource extends DataSource {
         }
 
         openConnectionsAndStreams();
+    }
+
+    protected BufferedDataSource(HttpURLConnection urlConnection, int bufferSize, Handler notify,
+                                 BandwidthEstimator bandwidthEstimator) throws IOException {
+
+        mOffset = 0;
+        mLength = -1;
+        mBufferSize = bufferSize;
+        mUri = urlConnection.getURL().toString();
+        mCurrentOffset = 0;
+        mNotify = notify;
+        mBandwidthEstimator = bandwidthEstimator;
+
+        if (mNotify != null) {
+            mReconnectThread = new HandlerThread("Reconnect thread");
+            mReconnectThread.start();
+
+            mReconnectHandler = new ReconnectHandler(mReconnectThread.getLooper());
+        }
+
+        useConnectionsAndStreams(urlConnection);
     }
 
     @Override
@@ -155,10 +165,6 @@ public abstract class BufferedDataSource extends DataSource {
 
     @Override
     public int readByte() throws IOException {
-        if (mConnectError != STATUS_OK) {
-            return mConnectError;
-        }
-
         checkConnectionAndStream();
 
         int readByte = mBis.read();
@@ -179,10 +185,6 @@ public abstract class BufferedDataSource extends DataSource {
 
     @Override
     public long skipBytes(long count) throws IOException {
-        if (mConnectError != STATUS_OK) {
-            return mConnectError;
-        }
-
         checkConnectionAndStream();
 
         long totalSkipped = 0;
@@ -267,7 +269,7 @@ public abstract class BufferedDataSource extends DataSource {
     }
 
     @Override
-    public void reset() throws IOException {
+    public void reset() {
         // Interested subclasses should override this.
     }
 
@@ -384,6 +386,64 @@ public abstract class BufferedDataSource extends DataSource {
         }
     }
 
+    protected void useConnectionsAndStreams(HttpURLConnection urlConnection) throws IOException {
+        InputStream in = null;
+        mRangeExtended = false;
+        if (LOGS_ENABLED) Log.d(TAG, "useConnectionsAndStreams at " + mCurrentOffset);
+
+        mHttpURLConnection = useHttpConnection(urlConnection);
+        in = mHttpURLConnection.getInputStream();
+
+        // Set bufferSize to the default size.
+        int bufferSize = Configuration.DEFAULT_HTTP_BUFFER_SIZE;
+
+        if (mBufferSize != -1) {
+            // Size specified at create time.
+            bufferSize = mBufferSize;
+        }
+
+        mBufferSize = bufferSize;
+
+        // TODO: We need to check if we run on a low memory device and adjust
+        // the buffer size.
+        if (in != null) {
+            mBis = new BufferedStream(in, bufferSize, mBandwidthEstimator, mReconnectHandler);
+        } else {
+            throw new IOException("Unable to open data stream");
+        }
+    }
+
+    private HttpURLConnection useHttpConnection(HttpURLConnection httpConnection)
+            throws IOException {
+        try {
+            InetAddress address = InetAddress.getByName(httpConnection.getURL().getHost());
+            mServerIP = address.getHostAddress();
+
+            int responseCode = httpConnection.getResponseCode();
+
+            if (responseCode != HttpURLConnection.HTTP_OK
+                    && responseCode != HttpURLConnection.HTTP_PARTIAL) {
+                if (LOGS_ENABLED) Log.e(TAG, "Server responded with " + responseCode);
+                throw new IOException("Not OK from server");
+            }
+
+            try {
+                mContentLength =
+                        Long.parseLong(httpConnection.getHeaderField("Content-Length"));
+            } catch (NumberFormatException e) {
+                mContentLength = -1;
+                if (LOGS_ENABLED) Log.e(TAG, "Failed to Parse header field");
+            }
+
+            return httpConnection;
+
+        } catch (MalformedURLException e) {
+            throw new IOException("Not an HTTP Url!");
+        } catch (ProtocolException e) {
+            throw new IOException("Unsupported response from server!");
+        }
+    }
+
     protected void doReconnect() throws IOException {
 
         InputStream in = null;
@@ -487,14 +547,7 @@ public abstract class BufferedDataSource extends DataSource {
     @Override
     public abstract int readAt(long offset, byte[] buffer, int size) throws IOException;
 
-    @Override
-    public void requestReadPosition(long offset) throws IOException {
-        // Empty implementation, interested subclasses should override.
-    }
-
     class ReconnectHandler extends Handler {
-
-        private int mPreviousAvailable = 0;
 
         public ReconnectHandler(Looper looper) {
             super(looper);
@@ -506,9 +559,7 @@ public abstract class BufferedDataSource extends DataSource {
                 case MSG_RECONNECT:
                     try {
                         if (mBis != null) {
-                            int available = mBis.available();
-                            if (available != mPreviousAvailable) {
-                                mPreviousAvailable = available;
+                            if (mBis.isValidForReconnect()) {
                                 doReconnect();
                             } else {
                                 mBis.close();

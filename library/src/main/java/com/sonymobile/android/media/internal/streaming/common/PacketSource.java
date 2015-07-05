@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.common;
 
 import java.util.ArrayDeque;
 
@@ -24,7 +24,7 @@ import com.sonymobile.android.media.internal.AccessUnit;
 
 public class PacketSource {
 
-    private ArrayDeque<AccessUnit> mBuffer = new ArrayDeque<AccessUnit>();
+    private final ArrayDeque<AccessUnit> mBuffer = new ArrayDeque<>();
 
     private long mNextTimeUs = -1;
 
@@ -50,10 +50,6 @@ public class PacketSource {
             mBufferDataSize -= accessUnit.data.length;
         }
         return accessUnit;
-    }
-
-    public synchronized ArrayDeque<AccessUnit> getAllAccessUnits() {
-        return mBuffer;
     }
 
     public synchronized MediaFormat getFormat() {

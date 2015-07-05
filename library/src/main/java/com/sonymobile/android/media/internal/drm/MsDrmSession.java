@@ -17,7 +17,6 @@ package com.sonymobile.android.media.internal.drm;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 import android.media.MediaCrypto;
@@ -49,7 +48,7 @@ public class MsDrmSession extends DrmSession {
         mPsshInfo = psshInfo;
         mMediaDrm = new MediaDrm(DrmUUID.PLAY_READY);
         mOutputController = null;
-        mMediaCryptoMap = new HashMap<String, MediaCrypto>();
+        mMediaCryptoMap = new HashMap<>();
     }
 
     @Override
@@ -135,10 +134,8 @@ public class MsDrmSession extends DrmSession {
     private synchronized void releaseAllMediaCryptos() {
         if (DEBUG_ENABLED) Log.d(TAG, "Open MediaCryptos: " + mMediaCryptoMap.size());
 
-        Set<String> keys = mMediaCryptoMap.keySet();
-        for (String key : keys) {
-            MediaCrypto mediaCrypto = mMediaCryptoMap.get(key);
-            mediaCrypto.release();
+        for (Map.Entry<String, MediaCrypto> crypto : mMediaCryptoMap.entrySet()) {
+            crypto.getValue().release();
         }
         mMediaCryptoMap.clear();
     }

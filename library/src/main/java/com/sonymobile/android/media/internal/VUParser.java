@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import android.media.MediaCodec;
 import android.media.MediaCodec.CryptoInfo;
@@ -69,36 +70,23 @@ public class VUParser extends ISOBMFFParser {
 
     private ArrayList<String> mHmmpTitles;
 
-    private ArrayList<SinfData> mSinfList;
-
-    private byte[] mIpmpMetaData;
-
     protected boolean mIsMarlinProtected = false;
 
     private boolean mNeedsMTSD = false;
+
+    private HashMap<String, byte[]> mIconMap;
 
     public VUParser(DataSource source) {
         super(source);
         if (LOGS_ENABLED) Log.v(TAG, "create VUParser from source");
     }
 
-    public VUParser(String path, int maxBufferSize) throws IOException {
-        super(path, maxBufferSize);
-        if (LOGS_ENABLED) Log.v(TAG, "create VUParser from path");
-    }
-
-    public VUParser(String path, long offset, long length, int maxBufferSize) throws IOException {
-        super(path, offset, length, maxBufferSize);
-        if (LOGS_ENABLED) Log.v(TAG, "create VUParser from path");
-    }
-
-    public VUParser(FileDescriptor fd, long offset, long length) {
-        super(fd, offset, length);
-        if (LOGS_ENABLED) Log.v(TAG, "create VUParser from FileDescriptor");
-    }
-
     @Override
     public boolean parse() {
+        if (mIsParsed) {
+            return mParseResult;
+        }
+
         boolean parseOK = super.parse();
 
         mMetaDataValues.put(KEY_MIME_TYPE, MimeType.MNV);
@@ -108,6 +96,7 @@ public class VUParser extends ISOBMFFParser {
 
         updateAspectRatio();
 
+        saveVUThumbnails();
         return parseOK;
     }
 
@@ -138,9 +127,9 @@ public class VUParser extends ISOBMFFParser {
         long boxEndOffset = mCurrentOffset + header.boxDataSize;
         boolean parseOK = true;
         if (header.boxType == BOX_ID_FTYP) {
-            int majorBrand;
+
             try {
-                majorBrand = mDataSource.readInt();
+                int majorBrand = mDataSource.readInt();
                 if (majorBrand == FTYP_BRAND_MGSV) {
                     mIsMarlinProtected = true;
                 }
@@ -149,37 +138,11 @@ public class VUParser extends ISOBMFFParser {
             } catch (IOException e) {
                 if (LOGS_ENABLED) Log.e(TAG, "Exception parsing 'ftyp' box", e);
             }
-        } else if (header.boxType == BOX_ID_UUID) {
-            byte[] userType = new byte[16];
-            try {
-                mDataSource.read(userType);
-                mCurrentOffset += 16;
-                String uuidUserType = Util.bytesToHex(userType);
-                if (uuidUserType.equals(UUID_PROF)) {
-                    parseOK = parseUuidPROF(header);
-                } else if (uuidUserType.equals(UUID_MTSD)) {
-                    // MTSD box
-                    mMtsdOffset = header.startOffset;
-                    mNeedsMTSD = false;
-                } else if (uuidUserType.equals(UUID_USMT)) {
-                    // USMT box
-                    while (mCurrentOffset < boxEndOffset && parseOK) {
-                        BoxHeader nextBoxHeader = getNextBoxHeader();
-                        parseOK = parseBox(nextBoxHeader);
-                    }
-                } else {
-                    mCurrentOffset -= 16;
-                    parseOK = super.parseBox(header);
-                }
-            } catch (IOException e) {
-                if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'uuid' box", e);
-                parseOK = false;
-            }
         } else if (header.boxType == BOX_ID_MTDT) {
             parseOK = parseMtdt(header);
         } else if (header.boxType == BOX_ID_MTSM) {
             if (mMtsmList == null) {
-                mMtsmList = new ArrayList<MtsmEntry>();
+                mMtsmList = new ArrayList<>();
             }
             mCurrentMtsmEntry = new MtsmEntry();
             while (mCurrentOffset < boxEndOffset && parseOK) {
@@ -199,7 +162,7 @@ public class VUParser extends ISOBMFFParser {
             try {
                 mDataSource.skipBytes(4);
                 int metadataSampleCount = mDataSource.readInt();
-                mCurrentMtsmEntry.mMdstList = new ArrayList<MdstEntry>(metadataSampleCount);
+                mCurrentMtsmEntry.mMdstList = new ArrayList<>(metadataSampleCount);
                 for (int i = 0; i < metadataSampleCount; i++) {
                     MdstEntry mdstEntry = new MdstEntry();
                     mdstEntry.metadataSampleDescriptionIndex = mDataSource.readInt();
@@ -221,53 +184,96 @@ public class VUParser extends ISOBMFFParser {
 
             mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE,
                     mediaFormat.getString(MediaFormat.KEY_MIME));
-        } else if (header.boxType == BOX_ID_AVCC) {
-            byte[] data = new byte[(int)header.boxDataSize];
-            try {
-                if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
-                    mCurrentBoxSequence.removeLast();
-                    return false;
-                }
-            } catch (IOException e) {
-                if (LOGS_ENABLED) Log.e(TAG, "Error while parsing 'avcc' box", e);
-                mCurrentBoxSequence.removeLast();
-                return false;
-            }
-
-            if (mIsMarlinProtected) {
-                ByteBuffer buffer = parseAvccForMarlin(data);
-                if (buffer == null) {
-                    return false;
-                }
-                mCurrentMediaFormat.setByteBuffer("csd-0", buffer);
-
-                parseSPS(buffer.array());
-            } else {
-                AvccData avccData = parseAvcc(data);
-                if (avccData == null) {
-                    return false;
-                }
-                ByteBuffer csd0 = ByteBuffer.wrap(avccData.spsBuffer.array());
-                ByteBuffer csd1 = ByteBuffer.wrap(avccData.ppsBuffer.array());
-                mCurrentMediaFormat.setByteBuffer("csd-0", csd0);
-                mCurrentMediaFormat.setByteBuffer("csd-1", csd1);
-
-                parseSPS(avccData.spsBuffer.array());
-            }
-        } else if (header.boxType == BOX_ID_MDAT) {
-            if (mTracks.size() > 0 && !mIsFragmented && !mNeedsMTSD) {
-                mInitDone = true;
-            } else if (mIsFragmented && mFirstMoofOffset != -1) {
-                mInitDone = true;
-            } else {
-                mMdatFound = true;
-            }
         } else {
             parseOK = super.parseBox(header);
         }
         mCurrentOffset = boxEndOffset;
         mCurrentBoxSequence.removeLast();
         return parseOK;
+    }
+
+    @Override
+    protected boolean parseUuid(BoxHeader header) {
+        byte[] userType = new byte[16];
+        try {
+            mDataSource.read(userType);
+            mCurrentOffset += 16;
+            String uuidUserType = Util.bytesToHex(userType);
+            if (uuidUserType.equals(UUID_PROF)) {
+                return parseUuidPROF(header);
+            } else if (uuidUserType.equals(UUID_MTSD)) {
+                // MTSD box
+                mMtsdOffset = header.startOffset;
+                mNeedsMTSD = false;
+            } else if (uuidUserType.equals(UUID_USMT)) {
+                long boxEndOffset = mCurrentOffset + header.boxDataSize - 16;
+                // USMT box
+                while (mCurrentOffset < boxEndOffset) {
+                    BoxHeader nextBoxHeader = getNextBoxHeader();
+                    boolean result = parseBox(nextBoxHeader);
+                    if (!result) {
+                        return false;
+                    }
+                }
+            } else {
+                mCurrentOffset -= 16;
+                return super.parseBox(header);
+            }
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'uuid' box", e);
+            return false;
+        }
+
+        return true;
+    }
+
+    @Override
+    protected boolean parseAvcc(BoxHeader header) {
+        byte[] data = new byte[(int)header.boxDataSize];
+        try {
+            if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
+                return false;
+            }
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "Error while parsing 'avcc' box", e);
+            return false;
+        }
+
+        if (mIsMarlinProtected) {
+            ByteBuffer buffer = parseAvccForMarlin(data);
+            if (buffer == null) {
+                return false;
+            }
+            mCurrentMediaFormat.setByteBuffer("csd-0", buffer);
+
+            parseSPS(buffer.array());
+        } else {
+            AvccData avccData = parseAvccData(data);
+            if (avccData == null) {
+                return false;
+            }
+            ByteBuffer csd0 = ByteBuffer.wrap(avccData.spsBuffer.array());
+            ByteBuffer csd1 = ByteBuffer.wrap(avccData.ppsBuffer.array());
+            mCurrentMediaFormat.setByteBuffer("csd-0", csd0);
+            mCurrentMediaFormat.setByteBuffer("csd-1", csd1);
+
+            parseSPS(avccData.spsBuffer.array());
+        }
+
+        return true;
+    }
+
+    @Override
+    protected boolean parseMdat() {
+        if (mTracks.size() > 0 && !mIsFragmented && !mNeedsMTSD) {
+            mInitDone = true;
+        } else if (mIsFragmented && mFirstMoofOffset != -1) {
+            mInitDone = true;
+        } else {
+            mMdatFound = true;
+        }
+
+        return true;
     }
 
     protected boolean parseODSMData(IsoTrack odsmTrack) {
@@ -277,7 +283,7 @@ public class VUParser extends ISOBMFFParser {
             // TODO: Should multiple entries be supported?
             return false;
         }
-        mSinfList = new ArrayList<SinfData>(2);
+        ArrayList<SinfData> sinfList = new ArrayList<>(2);
 
         ByteBuffer stszData = sampleTable.getStszData();
         stszData.rewind();
@@ -297,7 +303,7 @@ public class VUParser extends ISOBMFFParser {
             stcoData.getInt(); // version and flags
             stcoData.getInt(); // entry_count
 
-            long sampleOffset = 0;
+            long sampleOffset;
             if (sampleTable.isUsingLongChunkOffsets()) {
                 sampleOffset = stcoData.getLong();
             } else {
@@ -311,7 +317,7 @@ public class VUParser extends ISOBMFFParser {
                 return false;
             }
             int size = 0;
-            int sizePart = 0;
+            int sizePart;
             do {
                 sizePart = (dataBuffer.get() & 0xFF);
                 size = ((size << 7) & 0xFFFFFF80) | (sizePart & 0x7F);
@@ -342,13 +348,12 @@ public class VUParser extends ISOBMFFParser {
                 SinfData sinfData = new SinfData();
                 sinfData.esIdReference = esTrackReferenceIndex;
                 sinfData.ipmpDescriptorId = ipmpDescriptorId;
-                mSinfList.add(sinfData);
+                sinfList.add(sinfData);
                 size -= kObjectSize;
             }
             dataBuffer.get(); // IPMP Descriptor Update Tag
-            int sinfCount = mSinfList.size();
+            int sinfCount = sinfList.size();
             size = 0;
-            sizePart = 0;
             do {
                 sizePart = (dataBuffer.get() & 0xFF);
                 size = ((size << 7) & 0xFFFFFF80) | (sizePart & 0x7F);
@@ -357,7 +362,6 @@ public class VUParser extends ISOBMFFParser {
                 dataBuffer.get(); // IPMP Descriptor Tag
                 int ipmpByteCount = 1;
                 int ipmpLength = 0;
-                sizePart = 0;
                 do {
                     sizePart = (dataBuffer.get() & 0xFF);
                     ipmpByteCount++;
@@ -368,14 +372,11 @@ public class VUParser extends ISOBMFFParser {
                 dataBuffer.getShort(); // IPMPS Type
                 byte[] ipmpData = new byte[ipmpLength - 3];
                 dataBuffer.get(ipmpData);
-                SinfData sinfData = null;
+                SinfData sinfData;
                 for (int i = 0; i < sinfCount; i++) {
-                    sinfData = mSinfList.get(i);
+                    sinfData = sinfList.get(i);
                     if (sinfData.ipmpDescriptorId == ipmpDescriptorId) {
-                        sinfData.ipmpData = new byte[ipmpData.length];
-                        for (int j = 0; j < ipmpData.length; j++) {
-                            sinfData.ipmpData[j] = ipmpData[j];
-                        }
+                        sinfData.ipmpData = ipmpData;
                         break;
                     }
                 }
@@ -383,7 +384,7 @@ public class VUParser extends ISOBMFFParser {
             }
             int ipmpDataLength = 0;
             for (int i = 0; i < sinfCount; i++) {
-                SinfData sinfData = mSinfList.get(i);
+                SinfData sinfData = sinfList.get(i);
                 ipmpDataLength += sinfData.ipmpData.length;
             }
 
@@ -414,7 +415,7 @@ public class VUParser extends ISOBMFFParser {
             for (int i = 0; i < numTracks; i++) {
                 IsoTrack track = (IsoTrack)mTracks.get(i);
                 for (int j = 0; j < sinfCount; j++) {
-                    SinfData sinfData = mSinfList.get(j);
+                    SinfData sinfData = sinfList.get(j);
                     if (sinfData.esIdReference == track.getTrackId()) {
                         track.getMetaData().addValue(MetaData.KEY_IPMP_DATA, sinfData.ipmpData);
                         // track index
@@ -441,7 +442,7 @@ public class VUParser extends ISOBMFFParser {
                                 sinfData.ipmpData.length);
 
                         // Create JSON for this track
-                        String jsonData = null;
+                        String jsonData;
                         try {
                             jsonData = Util.getJSONIPMPData(tempData);
                         } catch (JSONException e) {
@@ -460,9 +461,7 @@ public class VUParser extends ISOBMFFParser {
                 }
             }
 
-            mIpmpMetaData = ipmpMetaData;
-
-            addMetaDataValue(KEY_IPMP_DATA, mIpmpMetaData);
+            addMetaDataValue(KEY_IPMP_DATA, ipmpMetaData);
 
             mCurrentTrack.getMetaData()
                     .addValue(KEY_MIME_TYPE, MimeType.OCTET_STREAM);
@@ -483,12 +482,11 @@ public class VUParser extends ISOBMFFParser {
 
     private boolean parseUuidPROF(BoxHeader header) {
         long boxEndOffset = mCurrentOffset + header.boxDataSize - 16;
-        boolean parseOK = true;
         try {
             mDataSource.skipBytes(4); // version and flags
             mDataSource.skipBytes(4); // profile_entry_count, not necessary
             mCurrentOffset += 8;
-            while (mCurrentOffset < boxEndOffset && parseOK) {
+            while (mCurrentOffset < boxEndOffset) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 if (nextBoxHeader.boxType == fourCC('V', 'P', 'R', 'F')) {
                     mDataSource.skipBytes(10 * 4); // skippable data
@@ -500,9 +498,9 @@ public class VUParser extends ISOBMFFParser {
             }
         } catch (IOException e) {
             if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing UUID_PROF box", e);
-            parseOK = false;
+            return false;
         }
-        return parseOK;
+        return true;
     }
 
     private static class MtsmEntry {
@@ -520,16 +518,15 @@ public class VUParser extends ISOBMFFParser {
     }
 
     private boolean parseMtdt(BoxHeader header) {
-        boolean parseOK = true;
         // if mCurrentBoxSequence contains trak, then add metadata to current
         // track
         // else metadata is for file
         // we're currently not interested in anything on track level
         try {
             int numberOfUnits = mDataSource.readShort();
-            mHmmpTitles = new ArrayList<String>(1);
-            ArrayDeque<String> titleLanguages = new ArrayDeque<String>(1);
-            ArrayDeque<String> iconLanguages = new ArrayDeque<String>(1);
+            mHmmpTitles = new ArrayList<>(1);
+            ArrayDeque<String> titleLanguages = new ArrayDeque<>(1);
+            ArrayDeque<String> iconLanguages = new ArrayDeque<>(1);
             for (int i = 0; i < numberOfUnits; i++) {
                 short dataUnitSize = mDataSource.readShort();
                 int dataTypeID = mDataSource.readInt();
@@ -550,7 +547,7 @@ public class VUParser extends ISOBMFFParser {
                 } else if (encodingType == 0x101) {
                     if (dataTypeID == 0xA04) {
                         if (mIconList == null) {
-                            mIconList = new ArrayList<IconInfo>();
+                            mIconList = new ArrayList<>();
                         }
                         mDataSource.skipBytes(4); // selectionFlags
                         mDataSource.skipBytes(4); // reserved
@@ -576,7 +573,7 @@ public class VUParser extends ISOBMFFParser {
             if (LOGS_ENABLED) Log.e(TAG, "Exception while reading from 'MTDT' box", e);
             return false;
         }
-        return parseOK;
+        return true;
     }
 
     private static class IconInfo {
@@ -634,57 +631,19 @@ public class VUParser extends ISOBMFFParser {
 
     @Override
     public byte[] getByteBuffer(String key1, String key2) {
-        if (key1 == KEY_HMMP_ICON) {
-            String[] iconLanguages = getStringArray(KEY_HMMP_ICON_LANGUAGES);
-            int iconCount = mIconList.size();
-            for (int i = 0; i < iconCount; i++) {
-                IconInfo iconInfo = mIconList.get(i);
-                if (iconLanguages[iconInfo.languageIndex].equals(key2)) {
-                    int mtsmCount = mMtsmList.size();
-                    MtsmEntry mtsmEntry = null;
-                    for (int j = 0; j < mtsmCount; j++) {
-                        MtsmEntry tmpEntry = mMtsmList.get(j);
-                        if (tmpEntry.id == iconInfo.mtsmId) {
-                            mtsmEntry = tmpEntry;
-                            break;
-                        }
-                    }
-                    if (mtsmEntry == null) {
-                        if (LOGS_ENABLED) Log.e(TAG, "mtsmEntry is null");
-                        return null;
-                    }
-                    int mdstCount = mtsmEntry.mMdstList.size();
-                    MdstEntry mdstEntry = null;
-                    for (int j = 0; j < mdstCount; j++) {
-                        MdstEntry tmpEntry = mtsmEntry.mMdstList.get(j);
-                        if (tmpEntry.metadataSampleDescriptionIndex == iconInfo.mdstIndex) {
-                            mdstEntry = tmpEntry;
-                            break;
-                        }
-                    }
-                    if (mdstEntry == null) {
-                        if (LOGS_ENABLED) Log.e(TAG, "mdstEntry is null");
-                        return null;
-                    }
-                    // read icon from file
-                    byte[] data = new byte[mdstEntry.metadataSampleSize];
-                    try {
-                        mDataSource.readAt(mdstEntry.metadataSampleOffset + mMtsdOffset, data,
-                                data.length);
-                    } catch (IOException e) {
-                        if (LOGS_ENABLED) Log.e(TAG, "Error reading icon data from file", e);
-                        return null;
-                    }
-                    return data;
-                }
+        if (key1.equals(KEY_HMMP_ICON)) {
+            byte[] iconData = mIconMap.get(key2);
+            if (iconData != null) {
+                return iconData;
+            } else {
+                return null;
             }
-            return null;
         }
         return super.getByteBuffer(key1, key2);
     }
 
-    protected ByteBuffer parseAvccForMarlin(byte[] buffer) {
-        int currentBufferOffset = 0;
+    protected static ByteBuffer parseAvccForMarlin(byte[] buffer) {
+        int currentBufferOffset;
         if (buffer[0] != 1) { // configurationVersion
             return null;
         }
@@ -722,6 +681,57 @@ public class VUParser extends ISOBMFFParser {
         ByteBuffer csdData = ByteBuffer.wrap(csdArray);
         csdData.limit(csdArrayOffset);
         return csdData;
+    }
+
+    protected void saveVUThumbnails() {
+        if (mIconList == null) {
+            return;
+        }
+        mIconMap = new HashMap<>();
+        String[] iconLanguages = getStringArray(KEY_HMMP_ICON_LANGUAGES);
+        int iconCount = mIconList.size();
+        for (int i = 0; i < iconCount; i++) {
+            IconInfo iconInfo = mIconList.get(i);
+            if (mIconMap.containsKey(iconLanguages[iconInfo.languageIndex])) {
+                continue;
+            }
+            int mtsmCount = mMtsmList.size();
+            MtsmEntry mtsmEntry = null;
+            for (int j = 0; j < mtsmCount; j++) {
+                MtsmEntry tmpEntry = mMtsmList.get(j);
+                if (tmpEntry.id == iconInfo.mtsmId) {
+                    mtsmEntry = tmpEntry;
+                    break;
+                }
+            }
+            if (mtsmEntry == null) {
+                if (LOGS_ENABLED) Log.e(TAG, "mtsmEntry is null");
+                continue;
+            }
+            int mdstCount = mtsmEntry.mMdstList.size();
+            MdstEntry mdstEntry = null;
+            for (int j = 0; j < mdstCount; j++) {
+                MdstEntry tmpEntry = mtsmEntry.mMdstList.get(j);
+                if (tmpEntry.metadataSampleDescriptionIndex == iconInfo.mdstIndex) {
+                    mdstEntry = tmpEntry;
+                    break;
+                }
+            }
+            if (mdstEntry == null) {
+                if (LOGS_ENABLED) Log.e(TAG, "mdstEntry is null");
+                continue;
+            }
+            // read icon from file
+            byte[] data = new byte[mdstEntry.metadataSampleSize];
+            try {
+                mDataSource.readAt(mdstEntry.metadataSampleOffset + mMtsdOffset, data,
+                        data.length);
+            } catch (IOException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "Error reading icon data from file", e);
+                return;
+            }
+            mIconMap.put(iconLanguages[iconInfo.languageIndex], data);
+        }
     }
 
     public class VUIsoTrack extends ISOBMFFParser.IsoTrack {
@@ -826,15 +836,14 @@ public class VUParser extends ISOBMFFParser {
                     accessUnit.format = mMediaFormat;
                 } else {
                     cryptoInfo = new CryptoInfo();
-                    byte[] ivData = null;
-                    byte[] key = null;
                     int[] numClearBytes = new int[1];
                     numClearBytes[0] = 0;
                     int[] numEncryptedBytes = new int[1];
                     numEncryptedBytes[0] = accessUnit.size;
                     int numSubSamples = 1;
                     cryptoInfo.set(numSubSamples, numClearBytes,
-                            numEncryptedBytes, key, ivData, MediaCodec.CRYPTO_MODE_AES_CTR);
+                            numEncryptedBytes, null/*key*/, null/*ivData*/,
+                            MediaCodec.CRYPTO_MODE_AES_CTR);
                 }
             }
             accessUnit.cryptoInfo = cryptoInfo;
@@ -845,10 +854,4 @@ public class VUParser extends ISOBMFFParser {
             return accessUnit;
         }
     }
-
-    @Override
-    public Track createTrack() {
-        return new VUIsoTrack();
-    }
-
 }

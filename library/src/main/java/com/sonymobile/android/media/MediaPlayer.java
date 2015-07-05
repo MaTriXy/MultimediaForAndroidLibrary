@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.util.Vector;
 
+import android.annotation.SuppressLint;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
@@ -550,9 +551,9 @@ public final class MediaPlayer {
      * Class that holds information relevant to streamed dynamic content.
      */
     public static class Statistics {
-        private int linkSpeed;
+        private final int linkSpeed;
 
-        private String serverIP;
+        private final String serverIP;
 
         private String videoURI;
 
@@ -646,7 +647,7 @@ public final class MediaPlayer {
         /**
          * State when playback has been completed.
          */
-        COMPLETED;
+        COMPLETED
     }
 
     /**
@@ -714,11 +715,11 @@ public final class MediaPlayer {
 
     private Handler mPlayerEventHandler;
 
-    private Handler mCallbackDispatcher;
+    private final Handler mCallbackDispatcher;
 
-    private Object mStateLock = new Object();
+    private final Object mStateLock = new Object();
 
-    private Object mListenerLock = new Object();
+    private final Object mListenerLock = new Object();
 
     private SurfaceHolder mSurfaceHolder;
 
@@ -734,7 +735,7 @@ public final class MediaPlayer {
 
     private static class CallbackDispatcher extends Handler {
 
-        private WeakReference<MediaPlayer> mMediaPlayer;
+        private final WeakReference<MediaPlayer> mMediaPlayer;
 
         public CallbackDispatcher(WeakReference<MediaPlayer> mediaPlayer, Looper looper) {
             super(looper);
@@ -852,7 +853,7 @@ public final class MediaPlayer {
 
     private static class PlayerEventHandler extends Handler {
 
-        private WeakReference<MediaPlayer> mMediaPlayer;
+        private final WeakReference<MediaPlayer> mMediaPlayer;
 
         public PlayerEventHandler(WeakReference<MediaPlayer> mediaPlayer, Looper looper) {
             super(looper);
@@ -948,17 +949,17 @@ public final class MediaPlayer {
                 Process.THREAD_PRIORITY_MORE_FAVORABLE);
         mPlayerEventThread.start();
 
-        mPlayerEventHandler = new PlayerEventHandler(new WeakReference<MediaPlayer>(this),
+        mPlayerEventHandler = new PlayerEventHandler(new WeakReference<>(this),
                 mPlayerEventThread.getLooper());
 
         Looper looper = Looper.myLooper();
         if (looper != null) {
-            mCallbackDispatcher = new CallbackDispatcher(new WeakReference<MediaPlayer>(this),
+            mCallbackDispatcher = new CallbackDispatcher(new WeakReference<>(this),
                     looper);
         } else {
             looper = Looper.getMainLooper();
             if (looper != null) {
-                mCallbackDispatcher = new CallbackDispatcher(new WeakReference<MediaPlayer>(this),
+                mCallbackDispatcher = new CallbackDispatcher(new WeakReference<>(this),
                         looper);
             } else {
                 mCallbackDispatcher = null;
@@ -1255,7 +1256,7 @@ public final class MediaPlayer {
     /*
      * Test whether a given video scaling mode is supported.
      */
-    private boolean isVideoScalingModeSupported(int mode) {
+    private static boolean isVideoScalingModeSupported(int mode) {
         return (mode == VIDEO_SCALING_MODE_SCALE_TO_FIT ||
                 mode == VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
     }
@@ -1561,7 +1562,7 @@ public final class MediaPlayer {
                         Thread.MAX_PRIORITY);
                 mPlayerEventThread.start();
 
-                mPlayerEventHandler = new PlayerEventHandler(new WeakReference<MediaPlayer>(this),
+                mPlayerEventHandler = new PlayerEventHandler(new WeakReference<>(this),
                         mPlayerEventThread.getLooper());
                 mPlayer = new Player(mPlayerEventHandler, mContext, mAudioSessionId);
                 mState = State.IDLE;
@@ -1885,6 +1886,7 @@ public final class MediaPlayer {
      * @param mode what wake mode to set. Wake mode should be one of the defined
      *            in {@link android.os.PowerManager}.
      */
+    @SuppressLint("Wakelock")
     public void setWakeMode(Context context, int mode) {
         if (LOGS_ENABLED) Log.d(TAG, "setWakeMode(context, " + mode + ")");
 
@@ -2060,6 +2062,7 @@ public final class MediaPlayer {
         return mPlayer.getCustomVideoConfigurationParameter(key);
     }
 
+    @SuppressLint("Wakelock")
     private void updateKeepDeviceAlive() {
         synchronized (mStateLock) {
             if (LOGS_ENABLED) Log.d(TAG, "updateKeepDeviceAlive Player State: " + mState);

@@ -55,19 +55,21 @@ public final class SubtitleThread implements Codec {
 
     private static final int MSG_STOP = 10;
 
+    private static final int MSG_SEEK = 11;
+
     private HandlerThread mEventThread;
 
     private EventHandler mEventHandler;
 
     private MediaSource mSource;
 
-    private Clock mClock;
+    private final Clock mClock;
 
     private boolean mStarted = false;
 
     private SubtitleData mCurrentSubtitle = null;
 
-    private Handler mCallback;
+    private final Handler mCallback;
 
     private MediaDrm mMediaDrm;
 
@@ -77,7 +79,7 @@ public final class SubtitleThread implements Codec {
 
     private boolean mEos = false;
 
-    private HandlerHelper mHandlerHelper;
+    private final HandlerHelper mHandlerHelper;
 
     public SubtitleThread(MediaSource source, Clock clock,
             Handler callback) {
@@ -115,6 +117,10 @@ public final class SubtitleThread implements Codec {
         mEventThread = null;
         mEventHandler = null;
         mCurrentSubtitle = null;
+    }
+
+    public void seek() {
+        mEventHandler.obtainMessage(MSG_SEEK).sendToTarget();
     }
 
     private boolean openDrmSession(MediaFormat mediaFormat) {
@@ -161,6 +167,26 @@ public final class SubtitleThread implements Codec {
                 mCryptoSession = null;
             }
         }
+    }
+
+    private SubtitleData makeSubtitleData(AccessUnit accessUnit) {
+        if (mSource.getMetaData().containsKey(MetaData.KEY_IPMP_DATA)) {
+            if (mCryptoSession == null && !openDrmSession(accessUnit.format)) {
+                mCallback.obtainMessage(Player.MSG_CODEC_NOTIFY, CODEC_ERROR,
+                        MediaError.UNKNOWN).sendToTarget();
+                return null;
+            }
+
+            byte[] keyid = new byte[0];
+            byte[] iv = new byte[0];
+            accessUnit.data = mCryptoSession.decrypt(keyid,
+                    accessUnit.data, iv);
+            accessUnit.size = accessUnit.data.length;
+        }
+
+        return new SubtitleData(accessUnit.trackIndex,
+                accessUnit.timeUs, accessUnit.durationUs,
+                accessUnit.data, accessUnit.size);
     }
 
     @SuppressLint("HandlerLeak")
@@ -221,7 +247,7 @@ public final class SubtitleThread implements Codec {
                     break;
                 }
                 case MSG_HANDLE_SUBTITLE: {
-                    long delayMs = 10;
+                    long delayMs;
                     if (mCurrentSubtitle != null) {
                         if ((mCurrentSubtitle.getStartTimeUs() - mClock.getCurrentTimeUs()) / 1000
                                 < Configuration.SUBTITLE_PRETRIGGER_TIME_MS) {
@@ -244,23 +270,7 @@ public final class SubtitleThread implements Codec {
                         mCurrentSubtitle = null; // Should have expired by now.
 
                         if (accessUnit.status == AccessUnit.OK) {
-                            if (mSource.getMetaData().containsKey(MetaData.KEY_IPMP_DATA)) {
-                                if (mCryptoSession == null && !openDrmSession(accessUnit.format)) {
-                                    mCallback.obtainMessage(Player.MSG_CODEC_NOTIFY, CODEC_ERROR,
-                                            MediaError.UNKNOWN).sendToTarget();
-                                    break;
-                                }
-
-                                byte[] keyid = new byte[0];
-                                byte[] iv = new byte[0];
-                                accessUnit.data = mCryptoSession.decrypt(keyid,
-                                        accessUnit.data, iv);
-                                accessUnit.size = accessUnit.data.length;
-                            }
-
-                            mCurrentSubtitle = new SubtitleData(accessUnit.trackIndex,
-                                    accessUnit.timeUs, accessUnit.durationUs,
-                                    accessUnit.data, accessUnit.size);
+                            mCurrentSubtitle = makeSubtitleData(accessUnit);
 
                             delayMs = (accessUnit.timeUs - mClock.getCurrentTimeUs()) / 1000;
                             delayMs -= Configuration.SUBTITLE_PRETRIGGER_TIME_MS;
@@ -305,6 +315,32 @@ public final class SubtitleThread implements Codec {
                     reply.sendToTarget();
 
                     break;
+                }
+                case MSG_SEEK: {
+                    AccessUnit accessUnit = mSource.dequeueAccessUnit(TrackType.SUBTITLE);
+
+                    if (accessUnit.status == AccessUnit.OK) {
+                        SubtitleData subtitle = makeSubtitleData(accessUnit);
+
+                        if (subtitle != null) {
+                            mCallback.obtainMessage(Player.MSG_CODEC_NOTIFY,
+                                    CODEC_SUBTITLE_DATA, 0, subtitle).sendToTarget();
+
+                            if (mStarted) {
+                                mEventHandler.removeMessages(MSG_HANDLE_SUBTITLE);
+                                Message nMsg = mEventHandler.obtainMessage(MSG_HANDLE_SUBTITLE);
+                                mEventHandler.sendMessageDelayed(nMsg, 10);
+                            }
+                        }
+                    } else if (accessUnit.status == AccessUnit.END_OF_STREAM) {
+                        if (LOGS_ENABLED) Log.v(TAG, "End of stream");
+                        mEos = true;
+                        break;
+                    } else if (accessUnit.status != AccessUnit.NO_DATA_AVAILABLE) {
+                        if (LOGS_ENABLED) Log.v(TAG, "queue EOS");
+                        mEos = true;
+                        break;
+                    }
                 }
             }
         }

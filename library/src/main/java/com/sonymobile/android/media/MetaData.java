@@ -166,6 +166,11 @@ public interface MetaData {
     public static final String KEY_DISC_NUMBER = "dnum";
 
     /**
+     * Key for album art
+     */
+    public static final String KEY_ALBUM_ART = "albA";
+
+    /**
      * Key for mpd file.
      */
     public static final String KEY_MPD = "mpd";
@@ -206,9 +211,24 @@ public interface MetaData {
     /*package*/ static final String KEY_SAR_HEIGHT = "sar_height";
 
     /**
+     * Key for Pixel Aspect horizontal spacing
+     */
+    public static final String KEY_PASP_HORIZONTAL_SPACING = "paspHSpacing";
+
+    /**
+     * Key for Pixel Aspect vertical spacing
+     */
+    public static final String KEY_PASP_VERTICAL_SPACING = "paspVSpacing";
+
+    /**
      * Key for rotation degrees.
      */
     public static final String KEY_ROTATION_DEGREES = "rotation-degrees";
+
+    /**
+     * Key for Sony Mobile camera content flag
+     */
+    public static final String KEY_IS_CAMERA_CONTENT = "camc";
 
     /**
      * Gets an integer value from the meta data.
@@ -274,7 +294,7 @@ public interface MetaData {
     /**
      * Gets a byte[] from the meta data.
      *
-     * @param key of the byte[] that is wanted. Keys are specified in this
+     * @param key1 of the byte[] that is wanted. Keys are specified in this
      *            MetaData interface.
      * @param key2 extra parameter for a more specified call.
      * @return byte[] corresponding to the key wanted. If not found null is

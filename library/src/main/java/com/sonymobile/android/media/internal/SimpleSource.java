@@ -19,8 +19,8 @@ package com.sonymobile.android.media.internal;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
+import java.net.HttpURLConnection;
 import java.util.Vector;
-import java.util.concurrent.locks.ReentrantLock;
 
 import android.media.MediaFormat;
 import android.os.Handler;
@@ -34,7 +34,6 @@ import com.sonymobile.android.media.BandwidthEstimator;
 import com.sonymobile.android.media.MediaError;
 import com.sonymobile.android.media.MediaPlayer.Statistics;
 import com.sonymobile.android.media.MetaData;
-import com.sonymobile.android.media.MetaDataParserFactory;
 import com.sonymobile.android.media.RepresentationSelector;
 import com.sonymobile.android.media.TrackInfo;
 import com.sonymobile.android.media.TrackInfo.TrackType;
@@ -51,7 +50,7 @@ public final class SimpleSource extends MediaSource {
 
     private static final int MSG_CHECK_BUFFERING = 13;
 
-    MediaParser mMediaParser;
+    private MediaParser mMediaParser;
 
     private boolean mBuffering = false;
 
@@ -60,6 +59,8 @@ public final class SimpleSource extends MediaSource {
     private long mOffset;
 
     private long mLength;
+
+    private HttpURLConnection mUrlConnection;
 
     private int mMaxBufferSize;
 
@@ -85,7 +86,7 @@ public final class SimpleSource extends MediaSource {
         mEventThread = new HandlerThread("SimpleSource");
         mEventThread.start();
 
-        mEventHandler = new EventHandler(new WeakReference<SimpleSource>(this),
+        mEventHandler = new EventHandler(new WeakReference<>(this),
                 mEventThread.getLooper());
 
         if (path.startsWith("/") || path.startsWith("file")) {
@@ -107,10 +108,32 @@ public final class SimpleSource extends MediaSource {
         mSupportsPreview = true;
     }
 
+    public SimpleSource(HttpURLConnection urlConnection, Handler notify, int maxBufferSize) {
+        super(notify);
+        if (maxBufferSize == -1) {
+            maxBufferSize = Configuration.DEFAULT_HTTP_BUFFER_SIZE;
+        }
+
+        mOffset = 0;
+        mLength = -1;
+        mUrlConnection = urlConnection;
+        mMaxBufferSize = maxBufferSize;
+
+        mEventThread = new HandlerThread("SimpleSource");
+        mEventThread.start();
+
+        mEventHandler = new EventHandler(new WeakReference<SimpleSource>(this),
+                mEventThread.getLooper());
+
+        mIsHttp = true;
+        mBuffering = true;
+        notify(SOURCE_BUFFERING_START);
+    }
+
     @Override
     public void prepareAsync() {
         if (mMediaParser == null) {
-            mEventHandler.sendEmptyMessage(MSG_PREPARE);
+            mEventHandler.obtainMessage(MSG_PREPARE, mUrlConnection).sendToTarget();
         } else {
             notifyPrepared();
         }
@@ -136,16 +159,23 @@ public final class SimpleSource extends MediaSource {
     @Override
     public AccessUnit dequeueAccessUnit(TrackType type) {
         if (mIsHttp) {
-            AccessUnit accessUnit;
             try {
                 if (mMediaParser.hasDataAvailable(type)) {
-                    accessUnit = mMediaParser.dequeueAccessUnit(type);
                     if (mBuffering) {
+                        HttpBufferedDataSource httpBufferedDataSource =
+                                (HttpBufferedDataSource) mMediaParser.mDataSource;
+                        if (httpBufferedDataSource.getBufferedSize() <
+                                (((double)httpBufferedDataSource.length() /
+                                        mMediaParser.getDurationUs()) *
+                                        Configuration.HTTP_MIN_BUFFERING_DURATION_US)
+                                && !httpBufferedDataSource.isAtEndOfStream()) {
+                            return AccessUnit.ACCESS_UNIT_NO_DATA_AVAILABLE;
+                        }
                         mBuffering = false;
                         notify(SOURCE_BUFFERING_END);
                     }
 
-                    return accessUnit;
+                    return mMediaParser.dequeueAccessUnit(type);
                 } else {
                     if (!mBuffering) {
                         mBuffering = true;
@@ -230,11 +260,16 @@ public final class SimpleSource extends MediaSource {
         return null;
     }
 
-    private void onPrepareAsync() {
+    private void onPrepareAsync(HttpURLConnection urlConnection) {
         if (mMediaParser == null) {
             try {
-                mMediaParser = MediaParserFactory.createParser(mPath, mOffset, mLength,
-                        mMaxBufferSize, mEventHandler);
+                if (urlConnection != null) {
+                    mMediaParser = MediaParserFactory.createParser(urlConnection,
+                            mMaxBufferSize, mEventHandler);
+                } else {
+                    mMediaParser = MediaParserFactory.createParser(mPath, mOffset, mLength,
+                            mMaxBufferSize, mEventHandler);
+                }
             } catch (IOException e) {
                 notifyPrepareFailed(MediaError.IO);
                 return;
@@ -264,12 +299,15 @@ public final class SimpleSource extends MediaSource {
         if (percentage < 100) {
             mEventHandler.sendEmptyMessageAtTime(MSG_CHECK_BUFFERING,
                     SystemClock.uptimeMillis() + 1000);
+        } else if (mBuffering) {
+            mBuffering = false;
+            notify(SOURCE_BUFFERING_END);
         }
     }
 
     private static class EventHandler extends Handler {
 
-        private WeakReference<SimpleSource> mSource;
+        private final WeakReference<SimpleSource> mSource;
 
         public EventHandler(WeakReference<SimpleSource> source, Looper looper) {
             super(looper);
@@ -282,25 +320,15 @@ public final class SimpleSource extends MediaSource {
             SimpleSource thiz = mSource.get();
             switch (msg.what) {
                 case MSG_PREPARE:
-                    thiz.onPrepareAsync();
+                    thiz.onPrepareAsync((HttpURLConnection)msg.obj);
                     break;
                 case MSG_SEEKTO:
-                    thiz.onSeek(((Long)(msg.obj)).longValue());
+                    thiz.onSeek((Long) msg.obj);
                     break;
                 case SOURCE_BUFFERING_UPDATE:
                     if (thiz.mPrepared && !thiz.mEventHandler.hasMessages(MSG_CHECK_BUFFERING)) {
                         thiz.onCheckBuffering();
                     }
-                    break;
-                case SOURCE_BUFFERING_START:
-                    if (!thiz.mBuffering) {
-                        thiz.mBuffering = true;
-                        thiz.notify(SOURCE_BUFFERING_START);
-                    }
-                    break;
-                case SOURCE_BUFFERING_END:
-                    thiz.mBuffering = false;
-                    thiz.notify(SOURCE_BUFFERING_END);
                     break;
                 case SOURCE_ERROR:
                     thiz.notify(SOURCE_ERROR);

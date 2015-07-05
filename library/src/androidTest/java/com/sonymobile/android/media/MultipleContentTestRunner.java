@@ -21,9 +21,7 @@ import com.sonymobile.android.media.annotations.MetaInfo;
 import com.sonymobile.android.media.annotations.Protocol;
 
 import android.test.InstrumentationTestRunner;
-import android.util.Log;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -75,7 +73,7 @@ public class MultipleContentTestRunner extends InstrumentationTestRunner {
         return contentSuite;
     }
 
-    private boolean isPublicTestMethod(Method method) {
+    private static boolean isPublicTestMethod(Method method) {
         return method.getName().startsWith("test") && Modifier.isPublic(method.getModifiers());
     }
 
@@ -116,7 +114,7 @@ public class MultipleContentTestRunner extends InstrumentationTestRunner {
         return false;
     }
 
-    private boolean hasMetaInfoField(String field, TestContent content) {
+    private static boolean hasMetaInfoField(String field, TestContent content) {
 
         if (field.equals(TestContentProvider.KEY_WIDTH)) {
             return content.getWidth() != -1;

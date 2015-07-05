@@ -16,8 +16,6 @@
 
 package com.sonymobile.android.media.internal;
 
-import java.io.IOException;
-
 import android.util.Log;
 
 public class Buffer {
@@ -31,6 +29,8 @@ public class Buffer {
     private int mCurrentReadPosition;
 
     private int mCurrentWritePosition;
+
+    private int mReadPositionDuringReconnect;
 
     private boolean mClosed = false;
 
@@ -53,7 +53,7 @@ public class Buffer {
             return 0;
         }
 
-        int bytesSkipped = 0;
+        int bytesSkipped;
         int bytesAvailble = mCurrentWritePosition - mCurrentReadPosition;
 
         if (bytesAvailble == 0) {
@@ -71,7 +71,7 @@ public class Buffer {
         return bytesSkipped;
     }
 
-    public synchronized int available() throws IOException {
+    public synchronized int available() {
         if (mClosed) {
             if (LOGS_ENABLED) Log.e(TAG, "Can't check availble, buffer is closed!");
             return 0;
@@ -116,7 +116,7 @@ public class Buffer {
         if (byteCount == 0) {
             return 0;
         }
-        int bytesRead = 0;
+        int bytesRead;
         int bytesAvailble = mCurrentWritePosition - mCurrentReadPosition;
         if (bytesAvailble <= 0) {
             return 0;
@@ -165,6 +165,18 @@ public class Buffer {
         return savedData;
     }
 
+    public synchronized boolean isValidForReconnect() {
+        boolean isValid = mReadPositionDuringReconnect == 0
+                || mReadPositionDuringReconnect == mCurrentReadPosition
+                || mCurrentWritePosition - mCurrentReadPosition > 0;
+        mReadPositionDuringReconnect = mCurrentReadPosition;
+        return isValid;
+    }
+
+    public synchronized void resetReconnect() {
+        mReadPositionDuringReconnect = 0;
+    }
+
     protected synchronized int freeSpace() {
         return mByteBuffer.length - mCurrentWritePosition;
     }
@@ -182,7 +194,7 @@ public class Buffer {
     }
 
     protected synchronized void compact(int bytesToDiscard) {
-        int discardPosition = 0;
+        int discardPosition;
         if (bytesToDiscard == -1) {
             discardPosition = mCurrentReadPosition;
         } else {

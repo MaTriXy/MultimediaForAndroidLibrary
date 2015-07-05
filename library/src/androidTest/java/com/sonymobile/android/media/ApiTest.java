@@ -33,6 +33,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -702,7 +704,6 @@ public class ApiTest {
                 fail("Timeout in waitForPrepareAsync");
             }
         }
-        return;
     }
 
     public static void prepareAsync(TestContent tc) throws IOException {
@@ -927,17 +928,17 @@ public class ApiTest {
             TrackInfo[] ti = sMediaPlayer.getTrackInfo();
             assertTrue("TrackInfo length zero", ti.length != 0);
             boolean videoTrackFound = false;
-            for (int i = 0; i < ti.length; i++) {
-                if (ti[i].getTrackType() == TrackType.VIDEO) {
+            for (TrackInfo trackInfo : ti) {
+                if (trackInfo.getTrackType() == TrackType.VIDEO) {
                     videoTrackFound = true;
 
-                    TrackRepresentation[] tr = ti[i].getRepresentations();
+                    TrackRepresentation[] tr = trackInfo.getRepresentations();
                     assertTrue("No video representation in video track", tr.length > 0);
 
                     assertEquals("Width not equal to expected width", tc.getWidth(),
-                            ((VideoTrackRepresentation)tr[0]).getWidth());
+                            ((VideoTrackRepresentation) tr[0]).getWidth());
                     assertEquals("Height not equal to expected height", tc.getHeight(),
-                            ((VideoTrackRepresentation)tr[0]).getHeight());
+                            ((VideoTrackRepresentation) tr[0]).getHeight());
                 }
             }
 
@@ -1253,7 +1254,7 @@ public class ApiTest {
                 sMediaPlayer.selectTrack(0);
             }
             sMediaPlayer.play();
-            Vector<Integer> content = new Vector<Integer>();
+            Vector<Integer> content = new Vector<>();
             content.add(Integer.valueOf(0));
             content.add(Integer.valueOf(1));
             sMediaPlayer.selectTrack(0, content);
@@ -1591,11 +1592,11 @@ public class ApiTest {
         }
     }
 
-    public static boolean multipleRepresentations() {
+    private static boolean multipleRepresentations() {
         TrackInfo[] tracks = sMediaPlayer.getTrackInfo();
-        for (int i = 0; i < tracks.length; i++) {
-            if (tracks[i].getTrackType() == TrackType.VIDEO
-                    && tracks[i].getRepresentations().length > 1) {
+        for (TrackInfo trackInfo : tracks) {
+            if (trackInfo.getTrackType() == TrackType.VIDEO
+                    && trackInfo.getRepresentations().length > 1) {
                 return true;
             }
         }
@@ -1675,9 +1676,40 @@ public class ApiTest {
             for (String key : keys) {
                 assertTrue(key + " not found", metaData.containsKey(key));
                 String metadataEntry = metaData.getString(key);
-                String expectedEntry = tc.getMetaDataValue(key);
+                String expectedEntry = (String) tc.getMetaDataValue(key);
                 assertEquals("MetaData " + key + " did not match", expectedEntry, metadataEntry);
             }
+        } finally {
+            if (parser != null) {
+                parser.release();
+            }
+        }
+    }
+
+    public static void getMetaDataAlbumArt(TestContent tc) {
+        assertNotNull("No test content", tc);
+        assertNotNull("No content uri", tc.getContentUri());
+
+        MetaDataParser parser = null;
+        try {
+            parser = MetaDataParserFactory.create(tc.getContentUri());
+            assertNotNull("Parserfactory returned null parser", parser);
+            MetaData metaData = parser.getMetaData();
+
+            String key = MetaData.KEY_ALBUM_ART;
+
+            assertTrue(key + " not found", metaData.containsKey(key));
+            byte[] metadataEntry = metaData.getByteBuffer(key);
+            int expectedSize = tc.getAlbumArtSize();
+            assertEquals("MetaData " + key + " did not match", expectedSize,
+                    metadataEntry.length);
+            Bitmap albumArtBitmap = BitmapFactory
+                    .decodeByteArray(metadataEntry, 0, metadataEntry.length);
+            assertNotNull("Could not create album art bitmap", albumArtBitmap);
+            assertEquals("Album art width did not match", tc.getAlbumArtWidth(),
+                    albumArtBitmap.getWidth());
+            assertEquals("Album art height did not match", tc.getAlbumArtHeight(),
+                    albumArtBitmap.getHeight());
         } finally {
             if (parser != null) {
                 parser.release();
@@ -1751,6 +1783,37 @@ public class ApiTest {
             }
         } finally {
             shutDown();
+        }
+    }
+
+    public static void getMetaDataSonyMobileFlags(TestContent tc) {
+        assertNotNull("No test content", tc);
+        assertNotNull("No content uri", tc.getContentUri());
+
+        MetaDataParser parser = null;
+        try {
+            parser = MetaDataParserFactory.create(tc.getContentUri());
+            assertNotNull("Parserfactory returned null parser", parser);
+            int tracks = parser.getTrackCount();
+            for (int i = 0; i < tracks; i++) {
+                MetaData trackMeta = parser.getTrackMetaData(i);
+                assertTrue("No track mime found", trackMeta.containsKey(MetaData.KEY_MIME_TYPE));
+                // Don't know if this is Audio track or Video track
+                // so check for both.
+                String mime = trackMeta.getString(MetaData.KEY_MIME_TYPE);
+                if (!mime.startsWith("video")) {
+                    continue;
+                }
+                if (trackMeta.containsKey(MetaData.KEY_IS_CAMERA_CONTENT)) {
+                    int cameraFlags = trackMeta.getInteger(MetaData.KEY_IS_CAMERA_CONTENT);
+                    assertEquals("Camera content flag is not set",
+                            tc.getMetaDataValue(MetaData.KEY_IS_CAMERA_CONTENT), cameraFlags);
+                }
+            }
+        } finally {
+            if (parser != null) {
+                parser.release();
+            }
         }
     }
 
@@ -1893,11 +1956,11 @@ public class ApiTest {
 
     }
 
-    protected static void initMediaPlayer() {
+    private static void initMediaPlayer() {
         initMediaPlayer(null);
     }
 
-    protected static void initMediaPlayer(final Context context) {
+    private static void initMediaPlayer(final Context context) {
         /*
          * MediaPlayer is created on new thread since callbacks are executed on
          * creating thread. If the media player is created on the same thread as
@@ -1925,7 +1988,7 @@ public class ApiTest {
         }
     }
 
-    public static void setGetCustomVideoConfigurationParameter() throws IOException {
+    public static void setGetCustomVideoConfigurationParameter() {
         try {
             initMediaPlayer();
 
@@ -2002,7 +2065,7 @@ public class ApiTest {
         }
     }
 
-    protected static void shutDown() {
+    private static void shutDown() {
         try {
             if (sMediaPlayer != null && sMediaPlayer.getState() != MediaPlayer.State.END) {
                 sMediaPlayer.release();

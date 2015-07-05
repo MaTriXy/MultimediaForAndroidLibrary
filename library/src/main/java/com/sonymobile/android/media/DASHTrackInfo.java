@@ -22,13 +22,13 @@ package com.sonymobile.android.media;
  */
 public class DASHTrackInfo extends TrackInfo {
 
-    private long mStartTimeUs;
+    private final long mStartTimeUs;
 
-    private String mAccessibility;
+    private final String mAccessibility;
 
-    private String mRole;
+    private final String mRole;
 
-    private String mRating;
+    private final String mRating;
 
     /**
      * Create a new DASHTrackInfo. Normally a DASHTrackInfo should not be
@@ -45,8 +45,9 @@ public class DASHTrackInfo extends TrackInfo {
      * @param rating the rating scheme employed.
      */
     public DASHTrackInfo(TrackType trackType, String mimeType, long durationUs, String language,
-            long startTimeUs, String accessibility, String role, String rating) {
-        super(trackType, mimeType, durationUs, language);
+                         TrackRepresentation[] representations, long startTimeUs,
+                         String accessibility, String role, String rating) {
+        super(trackType, mimeType, durationUs, language, representations);
 
         mStartTimeUs = startTimeUs;
         mAccessibility = accessibility;

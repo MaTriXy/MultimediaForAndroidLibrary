@@ -62,7 +62,13 @@ public class TestContent {
 
     private String mContentType;
 
-    private HashMap<String, String> mMetaDataValues;
+    private int mAlbumArtSize = -1;
+
+    private int mAlbumArtWidth = -1;
+
+    private int mAlbumArtHeight = -1;
+
+    private final HashMap<String, Object> mMetaDataValues;
 
     public final static String ID_TYPE_LOCAL = "LOCAL";
 
@@ -89,10 +95,19 @@ public class TestContent {
 
     public final static String ID_TYPE_LOCAL_WITH_ROTATION = "LOCAL_WITH_ROTATION";
 
+    public final static String ID_TYPE_LOCAL_WITH_ALBUMART = "LOCAL_WITH_ALBUMART";
+
     public final static String ID_TYPE_LOCAL_NO_MFRA = "LOCAL_NO_MFRA";
 
+    public static final String ID_TYPE_LOCAL_AMR_NB = "LOCAL_AMR_NB";
+
+    public static final String ID_TYPE_LOCAL_AMR_WB = "LOCAL_AMR_WB";
+
+    public static final String ID_TYPE_LOCAL_WITH_SONY_MOBILE_FLAGS =
+            "LOCAL_WITH_SONY_MOBILE_FLAGS";
+
     public TestContent() {
-        mMetaDataValues = new HashMap<String, String>();
+        mMetaDataValues = new HashMap<>();
     }
 
     public String getContentUri() {
@@ -244,11 +259,11 @@ public class TestContent {
         this.mTrackMimeTypeVideo = mTrackMimeTypeVideo;
     }
 
-    public void setMetaDataValue(String key, String value) {
+    public void setMetaDataValue(String key, Object value) {
         mMetaDataValues.put(key, value);
     }
 
-    public String getMetaDataValue(String key) {
+    public Object getMetaDataValue(String key) {
         return mMetaDataValues.get(key);
     }
 
@@ -266,6 +281,30 @@ public class TestContent {
 
     public String getProtocolType() {
         return mProtocolType;
+    }
+
+    public void setAlbumArtSize(int albumArtSize) {
+        mAlbumArtSize = albumArtSize;
+    }
+
+    public int getAlbumArtSize() {
+        return mAlbumArtSize;
+    }
+
+    public void setAlbumArtWidth(int albumArtWidth) {
+        mAlbumArtWidth = albumArtWidth;
+    }
+
+    public int getAlbumArtWidth() {
+        return mAlbumArtWidth;
+    }
+
+    public void setAlbumArtHeight(int albumArtHeight) {
+        mAlbumArtHeight = albumArtHeight;
+    }
+
+    public int getAlbumArtHeight() {
+        return mAlbumArtHeight;
     }
 
 }

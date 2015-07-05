@@ -46,7 +46,7 @@ import com.sonymobile.android.media.internal.drm.DrmSession;
 import com.sonymobile.android.media.internal.drm.DrmSession.DrmLicenseException;
 import com.sonymobile.android.media.internal.drm.DrmSessionFactory;
 import com.sonymobile.android.media.internal.drm.DrmUUID;
-import com.sonymobile.android.media.internal.mpegdash.DASHSource;
+import com.sonymobile.android.media.internal.streaming.mpegdash.DASHSource;
 
 public final class Player {
 
@@ -104,8 +104,6 @@ public final class Player {
 
     public static final int NOTIFY_PREPARED = 1;
 
-    public static final int NOTIFY_PREPARED_FAILED = 2;
-
     public static final int NOTIFY_ERROR = 3;
 
     public static final int NOTIFY_BUFFERING_START = 4;
@@ -144,7 +142,7 @@ public final class Player {
 
     private MediaSource mSource;
 
-    private Handler mCallbacks;
+    private final Handler mCallbacks;
 
     private float mLeftVolume = -1;
 
@@ -180,11 +178,11 @@ public final class Player {
 
     private boolean mFlushingAudio = false;
 
-    private Object mGetPositionLock = new Object();
+    private final Object mGetPositionLock = new Object();
 
     private Handler mPrepareHandler;
 
-    private Context mContext;
+    private final Context mContext;
 
     private int mVideoScalingMode;
 
@@ -196,7 +194,7 @@ public final class Player {
 
     private int mRotation = 0;
 
-    public float mPlaybackSpeed = 1.0f;
+    private float mPlaybackSpeed = 1.0f;
 
     private boolean mStarted = false;
 
@@ -206,13 +204,13 @@ public final class Player {
 
     private boolean mErrorHasOccured = false;
 
-    private HashMap<String, Integer> mCustomVideoMediaFormatParams;
+    private final HashMap<String, Integer> mCustomVideoMediaFormatParams;
 
     private Message mExecutingSeekMessage;
 
     private Message mPendingSeekMessage;
 
-    private HandlerHelper mHandlerHelper;
+    private final HandlerHelper mHandlerHelper;
 
     public Player(Handler callbackListener, Context context, int audioSessionId) {
         mContext = context;
@@ -223,12 +221,12 @@ public final class Player {
             mAudioSessionId = AudioSessionManager.generateNewAudioSessionId(mContext);
         }
 
-        mCustomVideoMediaFormatParams = new HashMap<String, Integer>();
+        mCustomVideoMediaFormatParams = new HashMap<>();
 
         mEventThread = new HandlerThread("Player");
         mEventThread.start();
 
-        mEventHandler = new EventHandler(new WeakReference<Player>(this),
+        mEventHandler = new EventHandler(new WeakReference<>(this),
                 mEventThread.getLooper());
 
         mCallbacks = callbackListener;
@@ -401,6 +399,9 @@ public final class Player {
                 mSeekPositionMs = -1;
                 mExecutingSeekMessage = null;
             }
+            if (mSource.supportsPreview() && mSubtitleThread != null) {
+                mSubtitleThread.seek();
+            }
         } else {
             if (LOGS_ENABLED) Log.d(TAG, "Seek in progress, queue next seek to: " + msec);
         }
@@ -488,24 +489,18 @@ public final class Player {
     private boolean isVideoSetupComplete() {
         boolean hasVideo = mSource.getSelectedTrackIndex(TrackType.VIDEO) != -1;
 
-        if (!hasVideo) {
-            return true;
-        }
-        return mVideoThread != null && mVideoThread.isSetupCompleted();
+        return !hasVideo || (mVideoThread != null && mVideoThread.isSetupCompleted());
     }
 
     private boolean isAudioSetupComplete() {
         boolean hasAudio = mSource.getSelectedTrackIndex(TrackType.AUDIO) != -1;
 
-        if (!hasAudio) {
-            return true;
-        }
-        return mAudioThread != null && mAudioThread.isSetupCompleted();
+        return !hasAudio || (mAudioThread != null && mAudioThread.isSetupCompleted());
     }
 
     private static class EventHandler extends Handler {
 
-        private WeakReference<Player> mPlayer;
+        private final WeakReference<Player> mPlayer;
 
         public EventHandler(WeakReference<Player> player, Looper looper) {
             super(looper);
@@ -533,27 +528,25 @@ public final class Player {
                         thiz.mPrepareHandler = (Handler)msg.obj;
                     }
                     if (thiz.mDataSourceFd != null) {
-                        thiz.mSource = new SimpleSource(thiz.mDataSourceFd, thiz.mDataSourceOffset,
-                                thiz.mDataSourceLength, thiz.mEventHandler);
-                    } else {
-                        if (thiz.mDataSourcePath.startsWith("vuabs://")
-                                || thiz.mDataSourcePath.startsWith("vuabss://")) {
-                            thiz.mDataSourcePath = thiz.mDataSourcePath.replaceFirst("vuabs",
-                                    "http");
+                        try {
+                            thiz.mSource = new SimpleSource(thiz.mDataSourceFd, thiz.mDataSourceOffset,
+                                    thiz.mDataSourceLength, thiz.mEventHandler);
+                        } catch (IllegalArgumentException e) {
+                            // Ignore will be handled below.
                         }
-                        if (isDASHSource(thiz.mDataSourcePath)) {
+                    } else {
+                        if (HttpSnifferSource.canHandle(thiz.mDataSourcePath)) {
+                            thiz.mSource = new HttpSnifferSource(thiz.mDataSourcePath,
+                                    thiz.mEventHandler, thiz.mMaxBufferSize);
+                        } else if (DASHSource.canHandle(thiz.mDataSourcePath)) {
                             thiz.mSource = new DASHSource(thiz.mDataSourcePath, thiz.mEventHandler,
                                     thiz.mMaxBufferSize);
                         } else {
-                            try {
-                                thiz.mSource = new SimpleSource(thiz.mDataSourcePath,
-                                        thiz.mDataSourceOffset,
-                                        thiz.mDataSourceLength,
-                                        thiz.mEventHandler,
-                                        thiz.mMaxBufferSize);
-                            } catch (IllegalArgumentException e) {
-                                // Ignore will be handled below.
-                            }
+                            thiz.mSource = new SimpleSource(thiz.mDataSourcePath,
+                                    thiz.mDataSourceOffset,
+                                    thiz.mDataSourceLength,
+                                    thiz.mEventHandler,
+                                    thiz.mMaxBufferSize);
                         }
                     }
 
@@ -1119,12 +1112,6 @@ public final class Player {
                     break;
             }
         }
-
-        private boolean isDASHSource(String path) {
-            return (path.startsWith("http://")
-                    && (path.endsWith(".mpd") || path.indexOf(".mpd?") > 0))
-                    || path.endsWith("(format=mpd-time-csf)");
-        }
     }
 
     private void onError(int what) {
@@ -1159,7 +1146,7 @@ public final class Player {
                     byte[] psshData =
                             fileMeta.getByteBuffer(MetaData.KEY_DRM_PSSH_DATA);
 
-                    Map<UUID, byte[]> psshInfo = new HashMap<UUID, byte[]>();
+                    Map<UUID, byte[]> psshInfo = new HashMap<>();
                     psshInfo.put(DrmUUID.PLAY_READY, psshData);
 
                     mDrmSession = DrmSessionFactory.create(DrmUUID.PLAY_READY,

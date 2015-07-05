@@ -48,10 +48,6 @@ public class DASHBufferedDataSource extends BufferedDataSource {
         if (LOGS_ENABLED) Log.d(TAG, "readAt " + offset + ", " + size + " bytes"
                 + " mCurrentOffset: " + mCurrentOffset);
 
-        if (mConnectError != STATUS_OK) {
-            return mConnectError;
-        }
-
         checkConnectionAndStream();
 
         if (offset > mCurrentOffset) {
@@ -100,6 +96,10 @@ public class DASHBufferedDataSource extends BufferedDataSource {
                 }
             }
         } while (totalRead < size);
+
+        if (totalRead < size) {
+            throw new IOException("Not enough data read");
+        }
 
         return totalRead;
     }

@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.common;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -24,15 +24,15 @@ import android.util.Log;
 import com.sonymobile.android.media.BandwidthEstimator;
 import com.sonymobile.android.media.internal.Configuration;
 
-public class DefaultDASHBandwidthEstimator implements BandwidthEstimator {
+public class DefaultBandwidthEstimator implements BandwidthEstimator {
 
     private static final boolean LOGS_ENABLED = Configuration.DEBUG || false;
 
-    private static final String TAG = "DefaultDASHBandwidthEstimator";
+    private static final String TAG = "DefaultBandwidthEstimator";
 
-    private ArrayList<BandWidthMeasureItem> mBandWidthMeasure;
+    private final ArrayList<BandWidthMeasureItem> mBandWidthMeasure;
 
-    private Object mBandWidthMeasureLock = new Object();
+    private final Object mBandWidthMeasureLock = new Object();
 
     private long mOnDataTransferStartedTimeUs = -1;
 
@@ -40,10 +40,10 @@ public class DefaultDASHBandwidthEstimator implements BandwidthEstimator {
 
     private double mEstimatedBandwidth = 0;
 
-    private double mLatestBandwidthEntry1, mLatestBandwidthEntry2;
+    private double mLatestBandwidthEntry;
 
-    public DefaultDASHBandwidthEstimator() {
-        mBandWidthMeasure = new ArrayList<DefaultDASHBandwidthEstimator.BandWidthMeasureItem>();
+    public DefaultBandwidthEstimator() {
+        mBandWidthMeasure = new ArrayList<>();
     }
 
     @Override
@@ -140,10 +140,10 @@ public class DefaultDASHBandwidthEstimator implements BandwidthEstimator {
         double currentBps = mAccumulatedTransferredData * 8E6 /
                 ((System.nanoTime() / 1000) - mOnDataTransferStartedTimeUs);
 
-        mLatestBandwidthEntry2 = mLatestBandwidthEntry1;
-        mLatestBandwidthEntry1 = currentBps;
+        double latestBandwidthEntry = mLatestBandwidthEntry;
+        mLatestBandwidthEntry = currentBps;
 
-        if ((mEstimatedBandwidth / 4) > mLatestBandwidthEntry1) {
+        if ((mEstimatedBandwidth / 4) > currentBps) {
 
             if (LOGS_ENABLED) Log.i(TAG,
                     "Bandwidth dropped by over 75%, clearing earlier measurements");
@@ -153,7 +153,7 @@ public class DefaultDASHBandwidthEstimator implements BandwidthEstimator {
                 }
             }
         } else if ((mEstimatedBandwidth / 3) >
-                ((mLatestBandwidthEntry1 + mLatestBandwidthEntry2) / 2)) {
+                ((currentBps + latestBandwidthEntry) / 2)) {
             if (LOGS_ENABLED) Log.i(TAG,
                     "Last two bandwidth measurements dropped by over 67%, clearing "
                             + "earlier measurements");

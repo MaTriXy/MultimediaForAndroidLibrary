@@ -124,14 +124,14 @@ public class Util {
         return new String(hexChars);
     }
 
-    public static byte[] hexToBytes(String hexString) {
-        byte[] signed = new BigInteger(hexString, 16).toByteArray();
+    public static byte[] uuidStringToByteArray(String uuidString) {
+        byte[] signed = new BigInteger(uuidString, 16).toByteArray();
 
         if (signed.length == 16) {
             return signed;
         }
 
-        byte[] unsigned = new byte[hexString.length() / 2];
+        byte[] unsigned = new byte[uuidString.length() / 2];
         //BigInteger returns a signed byte array so we need to get rid of the signing.
         System.arraycopy(signed, 1, unsigned, 0, unsigned.length);
         return unsigned;
@@ -149,8 +149,8 @@ public class Util {
         property.put(INIT_DATA_KEY_PROCESSTYPE, PROCESS_TYPE_ANDROID);
         property.put(INIT_DATA_KEY_DATATYPE, DATA_TYPE_CENC);
 
-        for (int i = 0; i < kids.length; i++) {
-            kidsArray.put(bytesToHex(kids[i]));
+        for (byte[] kid : kids) {
+            kidsArray.put(bytesToHex(kid));
         }
         cenc.put(INIT_DATA_KEY_PSSH, bytesToHex(pssh));
         cenc.put(INIT_DATA_KEY_KIDS, kidsArray);

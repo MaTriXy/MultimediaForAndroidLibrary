@@ -19,9 +19,7 @@ package com.sonymobile.android.media.internal;
 import java.util.Vector;
 
 import android.media.MediaFormat;
-import android.os.Bundle;
 import android.os.Handler;
-import android.os.Message;
 
 import com.sonymobile.android.media.BandwidthEstimator;
 import com.sonymobile.android.media.MediaPlayer.Statistics;
@@ -48,11 +46,11 @@ public abstract class MediaSource {
 
     public static final int SOURCE_BUFFERING_UPDATE = 8;
 
-    private Handler mNotify;
+    private final Handler mNotify;
 
     protected boolean mSupportsPreview;
 
-    public MediaSource(Handler notify) {
+    protected MediaSource(Handler notify) {
         mNotify = notify;
     }
 

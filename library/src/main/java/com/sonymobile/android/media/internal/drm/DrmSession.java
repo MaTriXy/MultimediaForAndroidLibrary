@@ -19,7 +19,6 @@ package com.sonymobile.android.media.internal.drm;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
 
 import android.content.Context;
 import android.media.MediaCrypto;
@@ -29,7 +28,7 @@ import android.media.MediaDrm;
 public abstract class DrmSession {
 
     public static class DrmLicenseException extends Exception {
-        private int mErrorCode;
+        private final int mErrorCode;
 
         public DrmLicenseException(int errorCode) {
             mErrorCode = errorCode;
@@ -144,7 +143,7 @@ public abstract class DrmSession {
      *
      * @return A OutputController
      */
-    public OutputController getOutputController() {
+    public synchronized OutputController getOutputController() {
         return mOutputController;
     }
 }

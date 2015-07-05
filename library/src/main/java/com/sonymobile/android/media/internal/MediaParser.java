@@ -41,10 +41,12 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
 
     protected Hashtable<String, Object> mMetaDataValues;
 
-    protected ArrayList<Track> mTracks;
+    protected boolean mIsParsed;
+
+    protected boolean mParseResult;
 
     public MediaParser() {
-
+        mMetaDataValues = new Hashtable<>();
     }
 
     /**
@@ -55,58 +57,7 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
      */
     public MediaParser(DataSource source) {
         mDataSource = source;
-        mTracks = new ArrayList<MediaParser.Track>();
-        mMetaDataValues = new Hashtable<String, Object>();
-    }
-
-    /**
-     * Create a new MediaParser. User is responsible for calling release() on
-     * the parser after usage.
-     *
-     * @param uri to the content.
-     * @param maxBufferSize for http content.
-     */
-    public MediaParser(String uri, int maxBufferSize) throws IOException {
-        if (maxBufferSize == -1) {
-            maxBufferSize = Configuration.DEFAULT_HTTP_BUFFER_SIZE;
-        }
-        mDataSource = DataSource.create(uri, maxBufferSize, false);
-        mTracks = new ArrayList<MediaParser.Track>();
-        mMetaDataValues = new Hashtable<String, Object>();
-    }
-
-    /**
-     * Create a new MediaParser. User is responsible for calling release() on
-     * the parser after usage.
-     *
-     * @param uri to the content.
-     * @param offset to the content.
-     * @param length of the content.
-     * @param maxBufferSize for http content.
-     */
-    public MediaParser(String uri, long offset, long length, int maxBufferSize) throws IOException {
-        if (maxBufferSize == -1) {
-            maxBufferSize = Configuration.DEFAULT_HTTP_BUFFER_SIZE;
-        }
-        mDataSource = DataSource.create(uri, offset, (int)length, maxBufferSize, null, null, false);
-        mTracks = new ArrayList<MediaParser.Track>();
-        mMetaDataValues = new Hashtable<String, Object>();
-    }
-
-    /**
-     * Create a new MediaParser. User is responsible for calling release() on
-     * the parser after usage and also provide a valid FileDescriptor during the
-     * entire life cycle of the MediaParser as well as closing the provided
-     * FileDescriptor after usage.
-     *
-     * @param fd FileDescriptor to the content.
-     * @param offset to the content.
-     * @param length of the content.
-     */
-    public MediaParser(FileDescriptor fd, long offset, long length) {
-        mDataSource = DataSource.create(fd, offset, length);
-        mTracks = new ArrayList<MediaParser.Track>();
-        mMetaDataValues = new Hashtable<String, Object>();
+        mMetaDataValues = new Hashtable<>();
     }
 
     /**
@@ -122,9 +73,7 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
      * @return the track count.
      */
     @Override
-    public int getTrackCount() {
-        return mTracks.size();
-    }
+    public abstract int getTrackCount();
 
     /**
      * Get the meta data.
@@ -144,13 +93,7 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
      *         null is returned.
      */
     @Override
-    public MetaData getTrackMetaData(int index) {
-        Track t = mTracks.get(index);
-        if (t != null) {
-            return t.getMetaData();
-        }
-        return null;
-    }
+    public abstract MetaData getTrackMetaData(int index);
 
     /**
      * Releases this parser and closes open resources used by it.
@@ -172,18 +115,64 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
         }
     }
 
-    /**
-     * Get the track media format.
-     *
-     * @param trackIndex of the track.
-     * @return MediaFormat for the track. If no track is found for the specified
-     *         index null is returned.
-     */
-    public MediaFormat getTrackMediaFormat(int trackIndex) {
-        if (trackIndex < 0 || trackIndex >= mTracks.size()) {
+    /* MetaData interface functions */
+
+    public int getInteger(String key) {
+        if (mMetaDataValues.containsKey(key)) {
+            Integer val = (Integer)mMetaDataValues.get(key);
+            return val.intValue();
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    public long getLong(String key) {
+        if (mMetaDataValues.containsKey(key)) {
+            Long val = (Long)(mMetaDataValues.get(key));
+            return val.longValue();
+        }
+        return Long.MIN_VALUE;
+    }
+
+    public float getFloat(String key) {
+        if (mMetaDataValues.containsKey(key)) {
+            Float val = (Float)(mMetaDataValues.get(key));
+            return val.floatValue();
+        }
+        return Float.MIN_VALUE;
+    }
+
+    public String getString(String key) {
+        Object value = mMetaDataValues.get(key);
+        if (value == null) {
             return null;
         }
-        return mTracks.get(trackIndex).getMediaFormat();
+        return value.toString();
+    }
+
+    public String getString(String key1, String key2) {
+        return null;
+    }
+
+    public byte[] getByteBuffer(String key) {
+        return (byte[])(mMetaDataValues.get(key));
+    }
+
+    public byte[] getByteBuffer(String key1, String key2) {
+        return null;
+    }
+
+    public String[] getStringArray(String key) {
+        if (mMetaDataValues.containsKey(key)) {
+            Object[] values = (Object[])mMetaDataValues.get(key);
+            String[] strings = new String[values.length];
+            System.arraycopy(values, 0, strings, 0, values.length);
+            return strings;
+        }
+        return null;
+    }
+
+    public boolean containsKey(String key) {
+        return mMetaDataValues.containsKey(key);
     }
 
     /**
@@ -193,32 +182,6 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
      * @return the AccessUnit that's dequeued.
      */
     public abstract AccessUnit dequeueAccessUnit(TrackType type);
-
-    /**
-     * Interface definition for a generic track.
-     */
-    public interface Track {
-        /**
-         * Get the meta data.
-         *
-         * @return A MetaData object.
-         */
-        public MetaData getMetaData();
-
-        /**
-         * Get the media format.
-         *
-         * @return MediaFormat for the track.
-         */
-        public MediaFormat getMediaFormat();
-
-        /**
-         * Get the track type.
-         *
-         * @return TrackType for this track. See {@link TrackType}.
-         */
-        public TrackType getTrackType();
-    }
 
     /**
      * Get the duration in microseconds.
@@ -272,8 +235,6 @@ abstract public class MediaParser implements MetaDataParser, MetaData {
      * @return true if successful, false if not.
      */
     public abstract boolean canParse();
-
-    protected abstract Track createTrack();
 
     /**
      * Checks if there is data available.

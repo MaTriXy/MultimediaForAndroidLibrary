@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import java.util.ArrayList;
 
@@ -23,9 +23,9 @@ import com.sonymobile.android.media.TrackInfo;
 import com.sonymobile.android.media.TrackInfo.TrackType;
 import com.sonymobile.android.media.TrackRepresentation;
 import com.sonymobile.android.media.internal.Configuration;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.AdaptationSet;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.Period;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.Representation;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.AdaptationSet;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Period;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Representation;
 
 import android.util.Log;
 
@@ -35,9 +35,9 @@ public class DefaultDASHRepresentationSelector implements RepresentationSelector
 
     private static final String TAG = "DefaultDASHRepresentationSelector";
 
-    private MPDParser mMPDParser;
+    private final MPDParser mMPDParser;
 
-    private int mMaxBufferSize;
+    private final int mMaxBufferSize;
 
     private int mSwitchUpCounter = 0;
 
@@ -170,7 +170,7 @@ public class DefaultDASHRepresentationSelector implements RepresentationSelector
                     continue;
                 }
                 if (sortedRepresentations.size() == 0) {
-                    sortedRepresentations.add(0);
+                    sortedRepresentations.add(i);
                 } else {
                     int representationBandwidth =
                             videoAdaptationSet.representations.get(i).bandwidth;
@@ -205,15 +205,15 @@ public class DefaultDASHRepresentationSelector implements RepresentationSelector
                 if (availableBandwidth > representation.bandwidth) {
                     if (representation.bandwidth > currentSelectedBandwidth
                             && availableBandwidth < (float)representation.bandwidth * 1.3) {
-                        if (availableBandwidth > (float)representation.bandwidth * 1.1) {
-                            if (mSwitchUpRepresentation == sortedRepresentations.get(i)) {
-                                if (mSwitchUpCounter < 3) {
-                                    mSwitchUpCounter++;
-                                    continue;
-                                }
-                            } else {
-                                mSwitchUpCounter = 1;
-                                mSwitchUpRepresentation = sortedRepresentations.get(i);
+                        if (availableBandwidth < (float)representation.bandwidth * 1.1) {
+                            mSwitchUpCounter = 1;
+                            mSwitchUpRepresentation = sortedRepresentations.get(i);
+                            continue;
+                        }
+
+                        if (mSwitchUpRepresentation == sortedRepresentations.get(i)) {
+                            if (mSwitchUpCounter < 3) {
+                                mSwitchUpCounter++;
                                 continue;
                             }
                         } else {

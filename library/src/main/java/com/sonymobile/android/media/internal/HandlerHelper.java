@@ -21,7 +21,6 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Message;
 
-import java.lang.reflect.Array;
 import java.util.ArrayList;
 
 public class HandlerHelper {
@@ -48,9 +47,9 @@ public class HandlerHelper {
         }
     }
 
-    private ArrayList<WaitHandler> mMessageList = new ArrayList<>();
+    private final ArrayList<WaitHandler> mMessageList = new ArrayList<>();
 
-    private Object mListLock = new Object();
+    private final Object mListLock = new Object();
 
     public Object sendMessageAndAwaitResponse(Message msg) {
         HandlerThread waitThread = new HandlerThread("sendMessageAndAwaitResponse");

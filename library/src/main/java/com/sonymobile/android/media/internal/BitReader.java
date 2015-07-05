@@ -18,12 +18,12 @@ package com.sonymobile.android.media.internal;
 
 public class BitReader {
 
-    private byte[] mBytes;
+    private final byte[] mBytes;
 
     private int mPos = 0;
 
     public BitReader(byte[] byteData) {
-        mBytes = byteData;
+        mBytes = byteData.clone();
         mPos = 0;
     }
 
@@ -35,9 +35,7 @@ public class BitReader {
         int currentByte = 0xFF & mBytes[pos / 8];
 
         int bitIndex = pos % 8;
-        int bit = 0x01 & (currentByte >> (7 - bitIndex));
-
-        return bit;
+        return 0x01 & (currentByte >> (7 - bitIndex));
     }
 
     public int getBits(int nbrBits) {

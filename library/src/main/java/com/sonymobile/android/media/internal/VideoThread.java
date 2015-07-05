@@ -21,7 +21,7 @@ import static com.sonymobile.android.media.internal.Player.MSG_CODEC_NOTIFY;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
-import java.util.Set;
+import java.util.Map;
 
 import android.annotation.SuppressLint;
 import android.media.MediaCodec;
@@ -132,7 +132,7 @@ public final class VideoThread extends VideoCodecThread {
 
     private boolean mDequeueInputErrorFlag = false;
 
-    private Object mRenderingLock = new Object();
+    private final Object mRenderingLock = new Object();
 
     private HashMap<String, Integer> mCustomMediaFormatParams;
 
@@ -258,7 +258,11 @@ public final class VideoThread extends VideoCodecThread {
         mSampleAspectRatioWidth = 1;
         mSampleAspectRatioHeight = 1;
 
-        if (mediaFormat.containsKey(MetaData.KEY_SAR_WIDTH)
+        if (mediaFormat.containsKey(MetaData.KEY_PASP_VERTICAL_SPACING) && mediaFormat
+                .containsKey(MetaData.KEY_PASP_HORIZONTAL_SPACING)) {
+            mSampleAspectRatioWidth = mediaFormat.getInteger(MetaData.KEY_PASP_HORIZONTAL_SPACING);
+            mSampleAspectRatioHeight = mediaFormat.getInteger(MetaData.KEY_PASP_VERTICAL_SPACING);
+        } else if (mediaFormat.containsKey(MetaData.KEY_SAR_WIDTH)
                 && mediaFormat.containsKey(MetaData.KEY_SAR_HEIGHT)) {
             mSampleAspectRatioWidth = mediaFormat.getInteger(MetaData.KEY_SAR_WIDTH);
             mSampleAspectRatioHeight = mediaFormat.getInteger(MetaData.KEY_SAR_HEIGHT);
@@ -278,11 +282,10 @@ public final class VideoThread extends VideoCodecThread {
 
     private void addCustomMediaFormatParams(MediaFormat format) {
         if (mCustomMediaFormatParams != null) {
-            Set<String> keys = mCustomMediaFormatParams.keySet();
-            for (String key : keys) {
-                int value = mCustomMediaFormatParams.get(key);
-                if (LOGS_ENABLED) Log.d(TAG, "Adding Custom Param " + key + " : " + value);
-                format.setInteger(key, value);
+            for (Map.Entry<String, Integer> param : mCustomMediaFormatParams.entrySet()) {
+                if (LOGS_ENABLED)
+                    Log.d(TAG, "Adding Custom Param " + param.getKey() + " : " + param.getValue());
+                format.setInteger(param.getKey(), param.getValue());
             }
         }
     }
@@ -394,7 +397,10 @@ public final class VideoThread extends VideoCodecThread {
         }
 
         mSetupCompleted = true;
-        mSkipToIframe = true;
+
+        if (mime.equalsIgnoreCase(MimeType.AVC) || mime.equalsIgnoreCase(MimeType.HEVC)) {
+            mSkipToIframe = true;
+        }
     }
 
     private void doStart() {

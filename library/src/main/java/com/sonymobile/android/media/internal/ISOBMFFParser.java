@@ -27,7 +27,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 
 import android.media.MediaCodec;
 import android.media.MediaCodec.CryptoInfo;
@@ -170,6 +169,28 @@ public class ISOBMFFParser extends MediaParser {
 
     protected static final int BOX_ID_META = fourCC('m', 'e', 't', 'a');
 
+    protected static final int BOX_ID_SAMR = fourCC('s', 'a', 'm', 'r');
+
+    protected static final int BOX_ID_SAWB = fourCC('s', 'a', 'w', 'b');
+
+    protected static final int BOX_ID_SIDX = fourCC('s', 'i', 'd', 'x');
+
+    protected static final int BOX_ID_S263 = fourCC('s', '2', '6', '3');
+
+    protected static final int BOX_ID_H263 = fourCC('H', '2', '6', '3');
+
+    protected static final int BOX_ID_H263_2 = fourCC('h', '2', '6', '3');
+
+    protected static final int BOX_ID_DOTMP3 = fourCC('.', 'm', 'p', '3');
+
+    protected static final int BOX_ID_ALAC = fourCC('a', 'l', 'a', 'c');
+
+    protected static final int BOX_ID_PASP = fourCC('p', 'a', 's', 'p');
+
+    protected static final int BOX_ID_FLGS = fourCC('f', 'l', 'g', 's');
+
+    protected static final int BOX_ID_MFHD = fourCC('m', 'f', 'h', 'd');
+
     // iTunes metadata
     protected static final int BOX_ID_ILST = fourCC('i', 'l', 's', 't');
 
@@ -194,6 +215,8 @@ public class ISOBMFFParser extends MediaParser {
     protected static final int BOX_ID_ATWRT = fourCC((char)0xA9, 'w', 'r', 't'); // writer
 
     protected static final int BOX_ID_DISK = fourCC('d', 'i', 's', 'k'); // disknumber
+
+    protected static final int BOX_ID_COVR = fourCC('c', 'o', 'v', 'r'); // cover art
 
     protected static final int BOX_ID_DATA = fourCC('d', 'a', 't', 'a');
 
@@ -244,6 +267,8 @@ public class ISOBMFFParser extends MediaParser {
 
     protected static final int HEVC_NAL_UNIT_TYPE_CRA_PICTURE = 21;
 
+    protected static final String UUID_SOMD = "736F6D6489094E5DBE807CA58018263B";
+
     protected IsoTrack mCurrentAudioTrack;
 
     protected IsoTrack mCurrentVideoTrack;
@@ -268,11 +293,7 @@ public class ISOBMFFParser extends MediaParser {
 
     protected ArrayList<IsoTrack> mMfraTracks;
 
-    protected boolean mHasSampleTable = false;
-
     protected ArrayDeque<BoxHeader> mCurrentBoxSequence;
-
-    protected boolean mIsPlayReadyProtected = false;
 
     protected boolean mParseODSMData = false;
 
@@ -298,6 +319,8 @@ public class ISOBMFFParser extends MediaParser {
 
     protected int mNALLengthSize;
 
+    protected final ArrayList<IsoTrack> mTracks = new ArrayList<>(2);
+
     private static final int[] ISOBMFF_COMPATIBLE_BRANDS = {
             fourCC('i', 's', 'o', 'm'), fourCC('m', 'p', '4', '1'), fourCC('m', 'p', '4', '2'),
             fourCC('a', 'v', 'c', '1'), fourCC('3', 'g', 'p', '5'), fourCC('h', 'v', 'c', '1')
@@ -308,38 +331,26 @@ public class ISOBMFFParser extends MediaParser {
         if (LOGS_ENABLED) Log.v(TAG, "create ISOBMFFParser from source");
     }
 
-    public ISOBMFFParser(String path, int maxBufferSize) throws IOException {
-        super(path, maxBufferSize);
-        if (LOGS_ENABLED) Log.v(TAG, "create ISOBMFFParser from path");
-    }
-
-    public ISOBMFFParser(String path, long offset, long length, int maxBufferSize)
-            throws IOException {
-        super(path, offset, length, maxBufferSize);
-        if (LOGS_ENABLED) Log.v(TAG, "create ISOBMFFParser from path with length " + length);
-    }
-
-    public ISOBMFFParser(FileDescriptor fd, long offset, long length) {
-        super(fd, offset, length);
-        if (LOGS_ENABLED) Log.v(TAG, "create ISOBMFFParser from FileDescriptor");
-    }
-
     protected static int fourCC(char c1, char c2, char c3, char c4) {
         return c1 << 24 | c2 << 16 | c3 << 8 | c4;
     }
 
-    protected String ccruof(long id) {
-        StringBuilder sb = new StringBuilder(4);
-        sb.append((char)((id & 0x00000000FF000000) >> 24));
-        sb.append((char)((id & 0x0000000000FF0000) >> 16));
-        sb.append((char)((id & 0x000000000000FF00) >> 8));
-        sb.append((char)(id & 0x00000000000000FF));
-        return sb.toString();
+    protected static String ccruof(long id) {
+        return String.valueOf((char) ((id & 0x00000000FF000000) >> 24)) +
+                (char) ((id & 0x0000000000FF0000) >> 16) +
+                (char) ((id & 0x000000000000FF00) >> 8) +
+                (char) (id & 0x00000000000000FF);
     }
 
     @Override
     public boolean parse() {
         if (LOGS_ENABLED) Log.v(TAG, "ISOBMFFParser parse");
+        if (mIsParsed) {
+            return mParseResult;
+        }
+
+        mIsParsed = true;
+
         boolean parseOK = true;
 
         initParsing();
@@ -348,7 +359,7 @@ public class ISOBMFFParser extends MediaParser {
             long sourceLength = mDataSource.length();
             BoxHeader nextHeader;
             mCurrentOffset = 0;
-            while (mInitDone == false && (mCurrentOffset < sourceLength || sourceLength == -1) &&
+            while (!mInitDone && (mCurrentOffset < sourceLength || sourceLength == -1) &&
                     parseOK) {
                 nextHeader = getNextBoxHeader();
                 if (nextHeader == null) {
@@ -444,13 +455,41 @@ public class ISOBMFFParser extends MediaParser {
             }
         }
 
+        mParseResult = parseOK;
+
         return parseOK;
+    }
+
+    @Override
+    public int getTrackCount() {
+        return mTracks.size();
+    }
+
+    @Override
+    public MetaData getTrackMetaData(int index) {
+        IsoTrack t = mTracks.get(index);
+        if (t != null) {
+            return t.getMetaData();
+        }
+        return null;
     }
 
     protected void updateAspectRatio() {
         if (mCurrentVideoTrack != null) {
             MediaFormat videoFormat = mCurrentVideoTrack.getMediaFormat();
-            if (videoFormat.containsKey(MetaData.KEY_SAR_WIDTH)
+            // pasp information has higher priority than sample aspect ratio
+            if (videoFormat.containsKey(MetaData.KEY_PASP_HORIZONTAL_SPACING)
+                    && videoFormat.containsKey(MetaData.KEY_PASP_VERTICAL_SPACING)) {
+                int paspHSpacing = videoFormat.getInteger(MetaData.KEY_PASP_HORIZONTAL_SPACING);
+                int paspVSpacing = videoFormat.getInteger(MetaData.KEY_PASP_VERTICAL_SPACING);
+
+                int adjustedWidth = (int)Math.round(((double)videoFormat
+                        .getInteger(MediaFormat.KEY_WIDTH) * paspHSpacing)
+                        / paspVSpacing);
+
+                addMetaDataValue(KEY_WIDTH, adjustedWidth);
+                mCurrentVideoTrack.getMetaData().addValue(KEY_WIDTH, adjustedWidth);
+            } else if (videoFormat.containsKey(MetaData.KEY_SAR_WIDTH)
                     && videoFormat.containsKey(MetaData.KEY_SAR_HEIGHT)) {
                 int sarWidth = videoFormat.getInteger(MetaData.KEY_SAR_WIDTH);
                 int sarHeight = videoFormat.getInteger(MetaData.KEY_SAR_HEIGHT);
@@ -468,7 +507,7 @@ public class ISOBMFFParser extends MediaParser {
     private void updateRotation() {
         if (getMetaData().containsKey(MetaData.KEY_ROTATION_DEGREES)) {
             int rotationAngle = getMetaData().getInteger(MetaData.KEY_ROTATION_DEGREES);
-            for (Track track : mTracks) {
+            for (IsoTrack track : mTracks) {
                 if (track.getTrackType() == TrackType.VIDEO) {
                     track.getMediaFormat()
                             .setInteger(MetaData.KEY_ROTATION_DEGREES, rotationAngle);
@@ -479,15 +518,7 @@ public class ISOBMFFParser extends MediaParser {
 
     protected void initParsing() {
         mCurrentOffset = 0;
-        mCurrentBoxSequence = new ArrayDeque<BoxHeader>(10);
-    }
-
-    @Override
-    public MediaFormat getTrackMediaFormat(int trackIndex) {
-        if (trackIndex < 0 || trackIndex >= mTracks.size()) {
-            return null;
-        }
-        return ((IsoTrack)mTracks.get(trackIndex)).getMediaFormat();
+        mCurrentBoxSequence = new ArrayDeque<>(10);
     }
 
     @Override
@@ -576,9 +607,7 @@ public class ISOBMFFParser extends MediaParser {
 
         boolean parseOK = true;
         long boxEndOffset = mCurrentOffset + header.boxDataSize;
-        if (header.boxType == BOX_ID_FTYP) {
-
-        } else if (header.boxType == BOX_ID_MOOV) {
+        if (header.boxType == BOX_ID_MOOV) {
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 parseOK = parseBox(nextBoxHeader);
@@ -589,7 +618,7 @@ public class ISOBMFFParser extends MediaParser {
                 int numMfraTracks = mMfraTracks.size();
                 if (numMfraTracks > 0) {
                     for (int i = 0; i < numTracks; i++) {
-                        IsoTrack track = (IsoTrack)mTracks.get(i);
+                        IsoTrack track = mTracks.get(i);
                         for (int j = 0; j < numMfraTracks; j++) {
                             IsoTrack t = mMfraTracks.get(j);
                             if (t.getTrackId() == track.getTrackId()) {
@@ -612,7 +641,7 @@ public class ISOBMFFParser extends MediaParser {
                     + " Subtitle track " + getSelectedTrackIndex(TrackType.SUBTITLE));
 
             for (int i = 0; i < numTracks; i++) {
-                IsoTrack track = (IsoTrack)mTracks.get(i);
+                IsoTrack track = mTracks.get(i);
                 if (track.getMediaFormat() == null) {
                     if (LOGS_ENABLED)
                         Log.v(TAG, "Track " + i + " is unhandled, type " + track.getTrackType());
@@ -641,6 +670,19 @@ public class ISOBMFFParser extends MediaParser {
                 }
                 mParseODSMData = false;
             }
+            if (parseOK) {
+                if (mCurrentTrack.getTrackType() == TrackType.AUDIO
+                        && mCurrentAudioTrack == null) {
+                    if (LOGS_ENABLED) Log.v(TAG,
+                            "Setting audio track to " + mCurrentTrack.getTrackId());
+                    mCurrentAudioTrack = mCurrentTrack;
+                } else if (mCurrentTrack.getTrackType() == TrackType.VIDEO
+                        && mCurrentVideoTrack == null) {
+                    if (LOGS_ENABLED) Log.v(TAG,
+                            "Setting video track to " + mCurrentTrack.getTrackId());
+                    mCurrentVideoTrack = mCurrentTrack;
+                }
+            }
             mIsParsingTrack = false;
         } else if (header.boxType == BOX_ID_TKHD) {
             parseOK = readTkhd(header);
@@ -658,40 +700,21 @@ public class ISOBMFFParser extends MediaParser {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 parseOK = parseBox(nextBoxHeader);
             }
-
-            if (parseOK) {
-                if (mCurrentTrack.getTrackType() == TrackType.AUDIO
-                        && mCurrentAudioTrack == null) {
-                    if (LOGS_ENABLED) Log.v(TAG,
-                            "Setting audio track to " + mCurrentTrack.getTrackId());
-                    mCurrentAudioTrack = mCurrentTrack;
-                } else if (mCurrentTrack.getTrackType() == TrackType.VIDEO
-                        && mCurrentVideoTrack == null) {
-                    if (LOGS_ENABLED) Log.v(TAG,
-                            "Setting video track to " + mCurrentTrack.getTrackId());
-                    mCurrentVideoTrack = mCurrentTrack;
-                }
-            } else {
-                if (LOGS_ENABLED) Log.e(TAG, "Error parsing minf boxes");
-            }
         } else if (header.boxType == BOX_ID_STBL) {
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 parseOK = parseBox(nextBoxHeader);
             }
             if (parseOK) {
-                IsoTrack currentTrack = (IsoTrack)mTracks.get(mTracks.size() - 1);
+                IsoTrack currentTrack = mTracks.get(mTracks.size() - 1);
                 SampleTable sampleTable = currentTrack.getSampleTable();
                 sampleTable.setTimescale(currentTrack.getTimeScale());
 
-                if (sampleTable.calculateSampleCountAndDuration() == false) {
+                if (!sampleTable.calculateSampleCountAndDuration()) {
                     if (LOGS_ENABLED) Log.w(TAG,
                             "Error while calculating sample count and duration");
                 }
                 int sampleCount = sampleTable.getSampleCount();
-                if (sampleCount > 0) {
-                    mHasSampleTable = true;
-                }
                 long trackDurationUs = currentTrack.getDurationUs();
                 if (trackDurationUs > 0) {
                     float frameRate = (sampleCount * 1000000.0f / trackDurationUs);
@@ -728,12 +751,13 @@ public class ISOBMFFParser extends MediaParser {
 
             mCurrentMediaFormat = new MediaFormat();
 
+            mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.AVC);
+            mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.AVC);
+
             parseVisualSampleEntry(data);
 
-            mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.AVC);
             // TODO: Update this when we add support for nalSize other than 4
             mCurrentMediaFormat.setInteger("nal-size", 4);
-            mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.AVC);
 
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
@@ -742,29 +766,7 @@ public class ISOBMFFParser extends MediaParser {
             mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
 
         } else if (header.boxType == BOX_ID_AVCC) {
-            byte[] data = new byte[(int)header.boxDataSize];
-            try {
-                if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
-                    mCurrentBoxSequence.removeLast();
-                    return false;
-                }
-            } catch (IOException e) {
-                if (LOGS_ENABLED) Log.e(TAG, "Error while parsing 'avcc' box", e);
-                mCurrentBoxSequence.removeLast();
-                return false;
-            }
-
-            AvccData avccData = parseAvcc(data);
-            if (avccData == null) {
-                return false;
-            }
-            ByteBuffer csd0 = ByteBuffer.wrap(avccData.spsBuffer.array());
-            ByteBuffer csd1 = ByteBuffer.wrap(avccData.ppsBuffer.array());
-            mCurrentMediaFormat.setByteBuffer("csd-0", csd0);
-            mCurrentMediaFormat.setByteBuffer("csd-1", csd1);
-            mCurrentMediaFormat.setInteger("nal-length-size", mNALLengthSize);
-
-            parseSPS(avccData.spsBuffer.array());
+            parseOK = parseAvcc(header);
         } else if (header.boxType == BOX_ID_STTS) {
             byte[] data = new byte[(int)header.boxDataSize];
             try {
@@ -875,18 +877,19 @@ public class ISOBMFFParser extends MediaParser {
 
             mCurrentMediaFormat = new MediaFormat();
 
-            // mp4v is a type of VisualSampleEntry
-            parseVisualSampleEntry(data);
-
             mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.MPEG4_VISUAL);
             mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.MPEG4_VISUAL);
+
+            // mp4v is a type of VisualSampleEntry
+            parseVisualSampleEntry(data);
 
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 parseOK = parseBox(nextBoxHeader);
             }
             mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
-        } else if (header.boxType == BOX_ID_MP4A) {
+        } else if (header.boxType == BOX_ID_MP4A || header.boxType == BOX_ID_SAMR
+                || header.boxType == BOX_ID_SAWB) {
             byte[] data = new byte[28];
             try {
                 if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
@@ -904,10 +907,45 @@ public class ISOBMFFParser extends MediaParser {
 
             parseAudioSampleEntry(data);
 
+            String mime = null;
+            if (header.boxType == BOX_ID_SAMR) {
+                mime = MimeType.AMR_NB;
+            } else if (header.boxType == BOX_ID_SAWB) {
+                mime = MimeType.AMR_WB;
+            }
+
+            if (mime != null) {
+                mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, mime);
+                mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, mime);
+            }
+
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
                 parseOK = parseBox(nextBoxHeader);
             }
+            mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
+        } else if (header.boxType == BOX_ID_DOTMP3) {
+            byte[] data = new byte[28];
+            try {
+                if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
+                    mCurrentBoxSequence.removeLast();
+                    return false;
+                }
+            } catch (IOException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing '.mp3' box", e);
+
+                mCurrentBoxSequence.removeLast();
+                return false;
+            }
+
+            mCurrentMediaFormat = new MediaFormat();
+
+            parseAudioSampleEntry(data);
+
+            mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.MP3);
+            mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.MP3);
+
+            // no need to parse subboxes for mp3 format
             mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
         } else if (header.boxType == BOX_ID_ESDS) {
             // skip 4 for version and flags
@@ -942,12 +980,12 @@ public class ISOBMFFParser extends MediaParser {
                 parseOK = parseBox(nextBoxHeader);
             }
         } else if (header.boxType == BOX_ID_MEHD) {
-            int versionFlags = 0;
+            int versionFlags;
             try {
                 versionFlags = mDataSource.readInt();
                 int version = (versionFlags >> 24) & 0xFF;
 
-                long durationTicks = 0;
+                long durationTicks;
                 if (version == 1) {
                     durationTicks = mDataSource.readLong();
                 } else {
@@ -978,7 +1016,7 @@ public class ISOBMFFParser extends MediaParser {
                 IsoTrack track = null;
                 int numTracks = mTracks.size();
                 for (int i = 0; i < numTracks; i++) {
-                    IsoTrack t = (IsoTrack)(mTracks.get(i));
+                    IsoTrack t = mTracks.get(i);
                     if (t.getTrackId() == trackId) {
                         track = t;
                         break;
@@ -986,14 +1024,12 @@ public class ISOBMFFParser extends MediaParser {
                 }
 
                 if (track == null) {
-                    track = (IsoTrack)createTrack();
+                    track = createTrack();
                     track.setTrackId(trackId);
                     mTracks.add(track);
                 }
 
-                if (track != null) {
-                    track.setTrex(newTrex);
-                }
+                track.setTrex(newTrex);
             } catch (IOException e) {
                 if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'trex' box", e);
 
@@ -1028,7 +1064,7 @@ public class ISOBMFFParser extends MediaParser {
             parseOK = parseTrun(header);
         } else if (header.boxType == BOX_ID_MFRA) {
             if (!mFoundMfra) {
-                mMfraTracks = new ArrayList<ISOBMFFParser.IsoTrack>(2);
+                mMfraTracks = new ArrayList<>(2);
                 while (mCurrentOffset < boxEndOffset && parseOK) {
                     BoxHeader nextBoxHeader = getNextBoxHeader();
                     parseOK = parseBox(nextBoxHeader);
@@ -1095,6 +1131,10 @@ public class ISOBMFFParser extends MediaParser {
                 } else if (dataFormat == BOX_ID_MP4V) {
                     mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.MPEG4_VISUAL);
                     mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.MPEG4_VISUAL);
+                } else if (dataFormat == BOX_ID_S263 || dataFormat == BOX_ID_H263 ||
+                        dataFormat == BOX_ID_H263_2) {
+                    mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.H263);
+                    mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.H263);
                 }
             } catch (IOException e) {
                 if (LOGS_ENABLED) Log.e(TAG, "Exception while parsing 'frma' box", e);
@@ -1102,26 +1142,7 @@ public class ISOBMFFParser extends MediaParser {
                 return false;
             }
         } else if (header.boxType == BOX_ID_SCHM) {
-            try {
-                int versionFlags = mDataSource.readInt();
-                mDataSource.skipBytes(8); // scheme_type and scheme_version
-                if ((versionFlags & 0x01) != 0) {
-                    // TODO read scheme_uri if we're interested
-                    // byte[] data = new byte[(int)header.boxDataSize - 12];
-                    // mDataSource.read(data);
-                    mDataSource.skipBytes(header.boxDataSize - 12);
-                }
-            } catch (EOFException e) {
-                if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'schm' box", e);
-
-                mCurrentBoxSequence.removeLast();
-                parseOK = false;
-            } catch (IOException e) {
-                if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'schm' box", e);
-
-                mCurrentBoxSequence.removeLast();
-                parseOK = false;
-            }
+            parseOK = parseSchm(header);
         } else if (header.boxType == BOX_ID_SCHI) {
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
@@ -1150,65 +1171,7 @@ public class ISOBMFFParser extends MediaParser {
                 parseOK = false;
             }
         } else if (header.boxType == BOX_ID_SENC) {
-            if (mCurrentMoofTrackId == mCurrentTrackId && !mSkipInsertSamples && !mParsedSencData) {
-                mParsedSencData = true;
-                try {
-                    int versionFlags = mDataSource.readInt();
-
-                    int sampleCount = mDataSource.readInt();
-
-                    ArrayList<CryptoInfo> cryptoInfos = new ArrayList<CryptoInfo>(sampleCount);
-
-                    for (int i = 0; i < sampleCount; i++) {
-                        CryptoInfo info = new CryptoInfo();
-                        info.mode = MediaCodec.CRYPTO_MODE_AES_CTR;
-                        info.iv = new byte[16];
-                        if (mCurrentTrack.mDefaultIVSize == 16) {
-                            mDataSource.read(info.iv);
-                        } else {
-                            // pad IV data to 128 bits
-                            byte[] iv = new byte[8];
-                            mDataSource.read(iv);
-                            System.arraycopy(iv, 0, info.iv, 0, 8);
-                        }
-                        if ((versionFlags & 0x00000002) > 0) {
-                            short subSampleCount = mDataSource.readShort();
-                            info.numSubSamples = subSampleCount;
-                            info.numBytesOfClearData = new int[subSampleCount];
-                            info.numBytesOfEncryptedData = new int[subSampleCount];
-                            for (int j = 0; j < subSampleCount; j++) {
-                                info.numBytesOfClearData[j] = mDataSource.readShort();
-                                info.numBytesOfEncryptedData[j] = mDataSource.readInt();
-                            }
-                        } else {
-                            info.numSubSamples = 1;
-                            info.numBytesOfClearData = new int[1];
-                            info.numBytesOfClearData[0] = 0;
-                            info.numBytesOfEncryptedData = new int[1];
-                            info.numBytesOfEncryptedData[0] = -1;
-                        }
-
-                        if (info.numBytesOfClearData[0] == 0 && mCurrentTrack
-                                .getTrackType() == TrackType.VIDEO) {
-                            info.iv[15] = (byte)mNALLengthSize;
-                        }
-
-                        cryptoInfos.add(info);
-                    }
-
-                    mCurrentTrack.addCryptoInfos(cryptoInfos);
-                } catch (EOFException e) {
-                    if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'senc' box", e);
-
-                    mCurrentBoxSequence.removeLast();
-                    parseOK = false;
-                } catch (IOException e) {
-                    if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'senc' box", e);
-
-                    mCurrentBoxSequence.removeLast();
-                    parseOK = false;
-                }
-            }
+            parseOK = parseSenc();
         } else if (header.boxType == BOX_ID_SINF) {
             while (mCurrentOffset < boxEndOffset && parseOK) {
                 BoxHeader nextBoxHeader = getNextBoxHeader();
@@ -1340,7 +1303,7 @@ public class ISOBMFFParser extends MediaParser {
                     mDataSource.skipBytes(2); // skip language code
                     byte[] buffer = new byte[(int)(header.boxDataSize - 6)];
                     mDataSource.read(buffer);
-                    String metaDataValue = null;
+                    String metaDataValue;
                     if ((0xFF & buffer[0]) == 0xFF && (0xFF & buffer[1]) == 0xFE
                             || (0xFF & buffer[0]) == 0xFE && (0xFF & buffer[1]) == 0xFF) {
                         metaDataValue = new String(buffer, 0, buffer.length - 2,
@@ -1383,6 +1346,15 @@ public class ISOBMFFParser extends MediaParser {
                 }
                 mCurrentMetaDataKey = null;
             }
+        } else if (header.boxType == BOX_ID_COVR) {
+            if (boxIsUnder(BOX_ID_ILST)) {
+                mCurrentMetaDataKey = KEY_ALBUM_ART;
+                while (mCurrentOffset < boxEndOffset && parseOK) {
+                    BoxHeader nextBoxHeader = getNextBoxHeader();
+                    parseOK = parseBox(nextBoxHeader);
+                }
+                mCurrentMetaDataKey = null;
+            }
         } else if (header.boxType == BOX_ID_DATA) {
             parseOK = parseDataBox(header);
         } else if (header.boxType == BOX_ID_ID32) {
@@ -1412,7 +1384,7 @@ public class ISOBMFFParser extends MediaParser {
                     mDataSource.skipBytes(2); // skip language code
                     byte[] buffer = new byte[(int)(header.boxDataSize - 6)];
                     mDataSource.read(buffer);
-                    String metaDataValue = null;
+                    String metaDataValue;
                     if ((0xFF & buffer[0]) == 0xFF && (0xFF & buffer[1]) == 0xFE) {
                         if (buffer[buffer.length - 3] == 0 && buffer[buffer.length - 2] == 0) {
                             if (!mMetaDataValues.containsKey(KEY_TRACK_NUMBER)) {
@@ -1464,7 +1436,7 @@ public class ISOBMFFParser extends MediaParser {
                     mDataSource.skipBytes(2); // skip language code
                     byte[] buffer = new byte[(int)(header.boxDataSize - 6)];
                     mDataSource.read(buffer);
-                    String metaDataValue = null;
+                    String metaDataValue;
                     if ((0xFF & buffer[0]) == 0xFF && (0xFF & buffer[1]) == 0xFE
                             || (0xFF & buffer[0]) == 0xFE && (0xFF & buffer[1]) == 0xFF) {
                         metaDataValue = new String(buffer, 0, buffer.length - 2,
@@ -1483,14 +1455,74 @@ public class ISOBMFFParser extends MediaParser {
                 if (LOGS_ENABLED) Log.e(TAG, "IOException parsing 'yrrc' box", e);
                 parseOK = false;
             }
-        } else if (header.boxType == BOX_ID_MDAT) {
-            if (mTracks.size() > 0 && !mIsFragmented) {
-                mInitDone = true;
-            } else if (mIsFragmented && mFirstMoofOffset != -1) {
-                mInitDone = true;
-            } else {
-                mMdatFound = true;
+        } else if (header.boxType == BOX_ID_SIDX) {
+            parseOK = parseSidx(header);
+        } else if (header.boxType == BOX_ID_S263 || header.boxType == BOX_ID_H263 ||
+                header.boxType == BOX_ID_H263_2) {
+            byte[] data = new byte[78];
+            try {
+                if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
+                    mCurrentBoxSequence.removeLast();
+                    return false;
+                }
+            } catch (IOException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "Error while parsing h263 visual entry box", e);
+                mCurrentBoxSequence.removeLast();
+                return false;
             }
+
+            mCurrentMediaFormat = new MediaFormat();
+
+            mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.H263);
+            mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.H263);
+
+            parseVisualSampleEntry(data);
+
+            while (mCurrentOffset < boxEndOffset && parseOK) {
+                BoxHeader nextBoxHeader = getNextBoxHeader();
+                parseOK = parseBox(nextBoxHeader);
+            }
+            mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
+        } else if (header.boxType == BOX_ID_ALAC) {
+            byte[] data = new byte[28];
+            try {
+                if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
+                    mCurrentBoxSequence.removeLast();
+                    return false;
+                }
+                mCurrentMediaFormat = new MediaFormat();
+
+                parseAudioSampleEntry(data);
+
+                // parse alac magic cookie
+                int magicCookieSize = mDataSource.readInt();
+                int magicCookieType = mDataSource.readInt();
+                if (magicCookieType != BOX_ID_ALAC) {
+                    if (LOGS_ENABLED) Log.e(TAG, "malformed alac magic cookie");
+                    mCurrentBoxSequence.removeLast();
+                    return false;
+                }
+                mDataSource.skipBytes(4); // version and flags
+                byte[] magicCookie = new byte[magicCookieSize - 12];
+                mDataSource.read(magicCookie);
+                mCurrentMediaFormat.setByteBuffer("csd-0", ByteBuffer.wrap(magicCookie));
+            } catch (IOException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'alac' box", e);
+
+                mCurrentBoxSequence.removeLast();
+                return false;
+            }
+
+            mCurrentMediaFormat.setString(MediaFormat.KEY_MIME, MimeType.ALAC);
+            mCurrentTrack.getMetaData().addValue(KEY_MIME_TYPE, MimeType.ALAC);
+
+            mCurrentTrack.addSampleDescriptionEntry(mCurrentMediaFormat);
+        } else if (header.boxType == BOX_ID_PASP) {
+            parseOK = parsePasp(header);
+        } else if (header.boxType == BOX_ID_UUID) {
+            parseOK = parseUuid(header);
+        } else if (header.boxType == BOX_ID_MDAT) {
+            parseOK = parseMdat();
         } else {
             long skipSize = header.boxDataSize;
             try {
@@ -1513,10 +1545,118 @@ public class ISOBMFFParser extends MediaParser {
         return parseOK;
     }
 
+    protected boolean parseMdat() {
+        mMdatFound = true;
+        return true;
+    }
+
+    protected boolean parseAvcc(BoxHeader header) {
+        byte[] data = new byte[(int)header.boxDataSize];
+        try {
+            if (mDataSource.readAt(mCurrentOffset, data, data.length) != data.length) {
+                return false;
+            }
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "Error while parsing 'avcc' box", e);
+            return false;
+        }
+
+        AvccData avccData = parseAvccData(data);
+        if (avccData == null) {
+            return false;
+        }
+        ByteBuffer csd0 = ByteBuffer.wrap(avccData.spsBuffer.array());
+        ByteBuffer csd1 = ByteBuffer.wrap(avccData.ppsBuffer.array());
+        mCurrentMediaFormat.setByteBuffer("csd-0", csd0);
+        mCurrentMediaFormat.setByteBuffer("csd-1", csd1);
+        mCurrentMediaFormat.setInteger("nal-length-size", mNALLengthSize);
+
+        parseSPS(avccData.spsBuffer.array());
+        return true;
+    }
+
+    protected boolean parseSchm(BoxHeader header) {
+        try {
+            int versionFlags = mDataSource.readInt();
+            mDataSource.skipBytes(8); // scheme_type and scheme_version
+            if ((versionFlags & 0x01) != 0) {
+                // TODO read scheme_uri if we're interested
+                // byte[] data = new byte[(int)header.boxDataSize - 12];
+                // mDataSource.read(data);
+                mDataSource.skipBytes(header.boxDataSize - 12);
+            }
+        } catch (EOFException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'schm' box", e);
+
+            return false;
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'schm' box", e);
+            return false;
+        }
+        return true;
+    }
+
+    protected boolean parseSenc() {
+        if (mCurrentMoofTrackId == mCurrentTrackId && !mSkipInsertSamples && !mParsedSencData) {
+            mParsedSencData = true;
+            try {
+                int versionFlags = mDataSource.readInt();
+
+                int sampleCount = mDataSource.readInt();
+
+                ArrayList<CryptoInfo> cryptoInfos = new ArrayList<>(sampleCount);
+
+                for (int i = 0; i < sampleCount; i++) {
+                    CryptoInfo info = new CryptoInfo();
+                    info.mode = MediaCodec.CRYPTO_MODE_AES_CTR;
+                    info.iv = new byte[16];
+                    if (mCurrentTrack.mDefaultIVSize == 16) {
+                        mDataSource.read(info.iv);
+                    } else {
+                        // pad IV data to 128 bits
+                        byte[] iv = new byte[8];
+                        mDataSource.read(iv);
+                        System.arraycopy(iv, 0, info.iv, 0, 8);
+                    }
+                    if ((versionFlags & 0x00000002) > 0) {
+                        short subSampleCount = mDataSource.readShort();
+                        info.numSubSamples = subSampleCount;
+                        info.numBytesOfClearData = new int[subSampleCount];
+                        info.numBytesOfEncryptedData = new int[subSampleCount];
+                        for (int j = 0; j < subSampleCount; j++) {
+                            info.numBytesOfClearData[j] = mDataSource.readShort();
+                            info.numBytesOfEncryptedData[j] = mDataSource.readInt();
+                        }
+                    } else {
+                        info.numSubSamples = 1;
+                        info.numBytesOfClearData = new int[1];
+                        info.numBytesOfClearData[0] = 0;
+                        info.numBytesOfEncryptedData = new int[1];
+                        info.numBytesOfEncryptedData[0] = -1;
+                    }
+
+                    if (info.numBytesOfClearData[0] == 0 && mCurrentTrack
+                            .getTrackType() == TrackType.VIDEO) {
+                        info.iv[15] = (byte)mNALLengthSize;
+                    }
+
+                    cryptoInfos.add(info);
+                }
+
+                mCurrentTrack.addCryptoInfos(cryptoInfos);
+            } catch (EOFException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'senc' box", e);
+                return false;
+            } catch (IOException e) {
+                if (LOGS_ENABLED) Log.e(TAG, "Error parsing 'senc' box", e);
+                return false;
+            }
+        }
+        return true;
+    }
+
     protected boolean boxIsUnder(int boxType) {
-        Iterator<BoxHeader> iterator = mCurrentBoxSequence.iterator();
-        while (iterator.hasNext()) {
-            BoxHeader header = iterator.next();
+        for (BoxHeader header : mCurrentBoxSequence) {
             if (header.boxType == boxType) {
                 return true;
             }
@@ -1657,7 +1797,7 @@ public class ISOBMFFParser extends MediaParser {
             mDataSource.skipBytes(2); // skip language code
             byte[] buffer = new byte[(int)(header.boxDataSize - 6)];
             mDataSource.read(buffer);
-            String metaDataValue = null;
+            String metaDataValue;
             if ((0xFF & buffer[0]) == 0xFF && (0xFF & buffer[1]) == 0xFE
                     || (0xFF & buffer[0]) == 0xFE && (0xFF & buffer[1]) == 0xFF) {
                 metaDataValue = new String(buffer, 0, buffer.length - 2,
@@ -1710,7 +1850,7 @@ public class ISOBMFFParser extends MediaParser {
                 byte[][] kids = new byte[mTracks.size()][];
 
                 for (int i = 0; i < mTracks.size(); i++) {
-                    kids[i] = ((IsoTrack)mTracks.get(i)).mKID;
+                    kids[i] = (mTracks.get(i)).mKID;
                 }
 
                 String psshJson = Util.getMarlinPSSHTable(psshBox, kids);
@@ -1746,8 +1886,8 @@ public class ISOBMFFParser extends MediaParser {
             mDataSource.skipBytes(4); // version and flags
             int entryCount = mDataSource.readInt();
             for (int i = 0; i < entryCount; i++) {
-                long segmentDurationTicks = 0;
-                long mediaTimeTicks = 0;
+                long segmentDurationTicks;
+                long mediaTimeTicks;
                 // if (((versionFlags >> 24) & 0xFF) == 1){
                 // segmentDuration = mDataSource.readLong();
                 // mediaTime = mDataSource.readLong();
@@ -1786,10 +1926,10 @@ public class ISOBMFFParser extends MediaParser {
             int lengthSizeOfTrunNum = ((lengths >> 2) & 0x00000003) + 1;
             int lengthSizeOfSampleNum = (lengths & 0x00000003) + 1;
             int numberOfEntry = mDataSource.readInt();
-            ArrayList<Tfra> tfraList = new ArrayList<Tfra>(numberOfEntry);
+            ArrayList<Tfra> tfraList = new ArrayList<>(numberOfEntry);
             for (int i = 0; i < numberOfEntry; i++) {
-                long timeTicks = 0;
-                long moofOffset = 0;
+                long timeTicks;
+                long moofOffset;
                 if (version == 1) {
                     timeTicks = mDataSource.readLong();
                     moofOffset = mDataSource.readLong();
@@ -1814,7 +1954,7 @@ public class ISOBMFFParser extends MediaParser {
             IsoTrack track = null;
             int numTracks = mTracks.size();
             for (int i = 0; i < numTracks; i++) {
-                IsoTrack t = (IsoTrack)(mTracks.get(i));
+                IsoTrack t = mTracks.get(i);
                 if (t.getTrackId() == trackId) {
                     track = t;
                     break;
@@ -1823,7 +1963,7 @@ public class ISOBMFFParser extends MediaParser {
             if (track != null) {
                 track.setTfraList(tfraList);
             } else {
-                track = (IsoTrack)createTrack();
+                track = createTrack();
                 track.setTrackId(trackId);
                 track.setTfraList(tfraList);
                 mMfraTracks.add(track);
@@ -1839,7 +1979,7 @@ public class ISOBMFFParser extends MediaParser {
         return true;
     }
 
-    private boolean parseTrun(BoxHeader header) {
+    protected boolean parseTrun(BoxHeader header) {
         if (mCurrentMoofTrackId != mCurrentTrackId || mSkipInsertSamples) {
             return true;
         }
@@ -1847,7 +1987,7 @@ public class ISOBMFFParser extends MediaParser {
             int versionFlags = mDataSource.readInt();
             int sampleCount = mDataSource.readInt();
             int dataOffset = 0;
-            ArrayList<FragmentSample> fragmentSamples = new ArrayList<FragmentSample>(sampleCount);
+            ArrayList<FragmentSample> fragmentSamples = new ArrayList<>(sampleCount);
             if ((versionFlags & 0x000001) != 0) {
                 dataOffset = mDataSource.readInt();
             }
@@ -1936,7 +2076,7 @@ public class ISOBMFFParser extends MediaParser {
             IsoTrack track = null;
             int numTracks = mTracks.size();
             for (int i = 0; i < numTracks; i++) {
-                IsoTrack t = (IsoTrack)(mTracks.get(i));
+                IsoTrack t = mTracks.get(i);
                 if (t.getTrackId() == trackId) {
                     track = t;
                     break;
@@ -2022,13 +2162,13 @@ public class ISOBMFFParser extends MediaParser {
     }
 
     private boolean parseMvhd(BoxHeader header) {
-        int versionFlags = 0;
+        int versionFlags;
         try {
             versionFlags = mDataSource.readInt();
             int version = versionFlags >> 24;
             // long creationTime = 0;
             // long modificationTime = 0;
-            long durationTicks = 0;
+            long durationTicks;
             if (version == 1) {
                 // creationTime = mDataSource.readLong();
                 // modificationTime = mDataSource.readLong();
@@ -2067,8 +2207,8 @@ public class ISOBMFFParser extends MediaParser {
             if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'mdhd' box", e);
         }
         int version = data[0];
-        int timescale = 0;
-        long durationTicks = 0;
+        int timescale;
+        long durationTicks;
         short lang;
         String language;
         if (version == 1) {
@@ -2119,12 +2259,10 @@ public class ISOBMFFParser extends MediaParser {
     }
 
     protected boolean parseTkhd(byte[] data) {
-        int trackId = 0;
+        int trackId;
         // long duration = 0;
-        boolean trackEnabled = false;
-        int dynSize = -1;
+        int dynSize;
 
-        int flags = (data[1] & 0xFF) << 16 | (data[2] & 0xFF) << 8 | data[3] & 0xFF;
         if (data[0] == 1) { // version 1
             // skip 8 for creation_time
             // skip 8 for modification_time
@@ -2188,22 +2326,16 @@ public class ISOBMFFParser extends MediaParser {
             Log.w(TAG, "Can't read the rotation matrix");
         }
 
-        if ((flags & 1) == 1) {
-            trackEnabled = true;
-        } else {
-            if (LOGS_ENABLED) Log.w(TAG, "track not enabled");
-        }
-
         boolean foundTrack = false;
-        for (Track track : mTracks) {
-            if (((IsoTrack)track).getTrackId() == trackId) {
-                mCurrentTrack = (IsoTrack)track;
+        for (IsoTrack track : mTracks) {
+            if (track.getTrackId() == trackId) {
+                mCurrentTrack = track;
                 foundTrack = true;
             }
         }
 
         if (!foundTrack) {
-            mCurrentTrack = (IsoTrack)createTrack();
+            mCurrentTrack = createTrack();
             mCurrentTrack.setTrackId(trackId);
             mTracks.add(mCurrentTrack);
         }
@@ -2241,7 +2373,15 @@ public class ISOBMFFParser extends MediaParser {
         mCurrentTrack.getMetaData().addValue(KEY_WIDTH, width);
         mCurrentMediaFormat.setInteger(MediaFormat.KEY_HEIGHT, height);
         mCurrentTrack.getMetaData().addValue(KEY_HEIGHT, height);
-        int maxSize = ((width + 15) / 16) * ((height + 15) / 16) * 192;
+        String mime = mCurrentMediaFormat.getString(MediaFormat.KEY_MIME);
+        int maxSize;
+        // TODO: Move KEY_MAX_INPUT_SIZE setting from here, as we have not set mime
+        // in case of protected files
+        if (MimeType.AVC.equals(mime)) {
+            maxSize = ((width + 15) / 16) * ((height + 15) / 16) * 192;
+        } else {
+            maxSize = width * height * 3 / 2;
+        }
         mCurrentMediaFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxSize);
         addMetaDataValue(KEY_WIDTH, width);
         addMetaDataValue(KEY_HEIGHT, height);
@@ -2265,11 +2405,11 @@ public class ISOBMFFParser extends MediaParser {
         mCurrentMediaFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxSize);
     }
 
-    protected AvccData parseAvcc(byte[] buffer) {
+    protected AvccData parseAvccData(byte[] buffer) {
         AvccData avccData = new AvccData();
         avccData.spsBuffer = ByteBuffer.allocate(1024);
         avccData.ppsBuffer = ByteBuffer.allocate(1024);
-        int currentBufferOffset = 0;
+        int currentBufferOffset;
         if (buffer[0] != 1) { // configurationVersion
             return null;
         }
@@ -2285,9 +2425,7 @@ public class ISOBMFFParser extends MediaParser {
             spsUnit[1] = 0;
             spsUnit[2] = 0;
             spsUnit[3] = 1;
-            for (int j = 0; j < spsLength; j++) {
-                spsUnit[j + 4] = buffer[currentBufferOffset + j];
-            }
+            System.arraycopy(buffer, currentBufferOffset, spsUnit, 4, spsLength);
             avccData.spsBuffer.put(spsUnit);
             currentBufferOffset += spsLength;
         }
@@ -2300,9 +2438,7 @@ public class ISOBMFFParser extends MediaParser {
             ppsUnit[1] = 0;
             ppsUnit[2] = 0;
             ppsUnit[3] = 1;
-            for (int j = 0; j < ppsLength; j++) {
-                ppsUnit[j + 4] = buffer[currentBufferOffset + j];
-            }
+            System.arraycopy(buffer, currentBufferOffset, ppsUnit, 4, ppsLength);
             avccData.ppsBuffer.put(ppsUnit);
             currentBufferOffset += ppsLength;
         }
@@ -2453,10 +2589,95 @@ public class ISOBMFFParser extends MediaParser {
         return true;
     }
 
+    private boolean parseSidx(BoxHeader header) {
+        try {
+            long boxEndOffset = mCurrentOffset + header.boxDataSize;
+            int versionFlags = mDataSource.readInt();
+            int version = (versionFlags >> 24) & 0xFF;
+            int referenceId = mDataSource.readInt();
+            IsoTrack sidxTrack = null;
+            for (IsoTrack t : mTracks) {
+                if (t.getTrackId() == referenceId) {
+                    sidxTrack = t;
+                    break;
+                }
+            }
+            if (sidxTrack == null) {
+                if (LOGS_ENABLED) Log.w(TAG, "we did not find a matching track for sidx box");
+                // return true so parsing can continue
+                return true;
+            }
+
+            int sidxTimescale = mDataSource.readInt();
+            sidxTrack.setSidxTimescale(sidxTimescale);
+
+            // the following 8-16 bytes are only relevant for sub-sidx boxes,
+            // which we don't support
+            if (version == 0) {
+                mDataSource.skipBytes(8);
+            } else {
+                mDataSource.skipBytes(16);
+            }
+            mDataSource.skipBytes(2); // reserved
+            short referenceCount = mDataSource.readShort();
+
+            ArrayList<SidxEntry> sidxList = new ArrayList<>(referenceCount);
+            long sidxTotalDurationUs = 0;
+            long sidxTotalOffset = boxEndOffset;
+
+            for (int i = 0; i < referenceCount; i++) {
+                SidxEntry sidxEntry = new SidxEntry();
+
+                int referencedSize = mDataSource.readInt();
+                if (referencedSize < 0) {
+                    // reference type 1 (sub-sidx box) not supported
+                    // return true so parsing can continue
+                    return true;
+                }
+                referencedSize &= 0x7FFFFFFF;
+
+                sidxEntry.startOffset = sidxTotalOffset;
+                sidxTotalOffset += referencedSize;
+
+                long subsegmentDurationTicks = ((long)mDataSource.readByte() & 0xFF) << 24
+                        | ((long)mDataSource.readByte() & 0xFF) << 16
+                        | ((long)mDataSource.readByte() & 0xFF) << 8
+                        | (long)mDataSource.readByte() & 0xFF;
+
+                sidxEntry.startTimeUs = sidxTotalDurationUs;
+
+                sidxTotalDurationUs += subsegmentDurationTicks * 1000000 / sidxTimescale;
+
+                // Assume all segments start with SAP, so skip this info
+                mDataSource.skipBytes(4);
+
+                sidxList.add(sidxEntry);
+            }
+
+            sidxTrack.setSidxList(sidxList);
+
+            long mediaDuration = 0;
+            if (mMetaDataValues.containsKey(KEY_DURATION)) {
+                mediaDuration = (long) mMetaDataValues.get(KEY_DURATION);
+            }
+
+            if (sidxTotalDurationUs > 0 && mediaDuration == 0) {
+                addMetaDataValue(KEY_DURATION, sidxTotalDurationUs / 1000);
+            }
+
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing sidx box", e);
+            mCurrentBoxSequence.removeLast();
+            return false;
+        }
+
+        return true;
+    }
+
     private boolean parseDataBox(BoxHeader header) {
         try {
             if (mCurrentMetaDataKey != null) {
-                String metaDataValue;
+                Object metaDataValue;
                 if (mCurrentMetaDataKey == KEY_DISC_NUMBER) {
                     mDataSource.skipBytes(4); // skip type
                     mDataSource.skipBytes(4); // skip locale
@@ -2465,6 +2686,12 @@ public class ISOBMFFParser extends MediaParser {
                     int diskNumber = mDataSource.readShort();
                     mDataSource.skipBytes(2); // skip total number of disks
                     metaDataValue = Integer.toString(diskNumber);
+                } else if (mCurrentMetaDataKey == KEY_ALBUM_ART) {
+                    mDataSource.skipBytes(4); // skip type
+                    mDataSource.skipBytes(4); // skip locale
+                    byte[] albumart = new byte[(int)header.boxDataSize - 8];
+                    mDataSource.read(albumart);
+                    metaDataValue = albumart;
                 } else {
                     byte[] typefield = new byte[4];
                     mDataSource.read(typefield);
@@ -2509,6 +2736,62 @@ public class ISOBMFFParser extends MediaParser {
         return true;
     }
 
+    private boolean parsePasp(BoxHeader header) {
+        try {
+            int hSpacing = mDataSource.readInt();
+            int vSpacing = mDataSource.readInt();
+            mCurrentMediaFormat.setInteger(KEY_PASP_HORIZONTAL_SPACING, hSpacing);
+            mCurrentMediaFormat.setInteger(KEY_PASP_VERTICAL_SPACING, vSpacing);
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing pasp box", e);
+            mCurrentBoxSequence.removeLast();
+            return false;
+        }
+        return true;
+    }
+
+    protected boolean parseUuid(BoxHeader header) {
+        byte[] userType = new byte[16];
+        try {
+            mDataSource.read(userType);
+            mCurrentOffset += 16;
+            String uuidUserType = Util.bytesToHex(userType);
+            if (uuidUserType.equals(UUID_SOMD)) {
+                return parseUuidSomd(header);
+            }
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing 'uuid' box", e);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean parseUuidSomd(BoxHeader header) {
+        long boxEndOffset = mCurrentOffset + header.boxDataSize - 16;
+        try {
+            mDataSource.skipBytes(4); // version
+            mCurrentOffset += 4;
+            while (mCurrentOffset < boxEndOffset) {
+                BoxHeader nextBoxHeader = getNextBoxHeader();
+                if (nextBoxHeader.boxType == BOX_ID_FLGS) {
+                    long flagsData = mDataSource.readLong();
+                    long validData = mDataSource.readLong();
+                    // Only last bit is currently used
+                    if ((validData & 0x01) != 0 && (flagsData & 0x01) != 0) {
+                        mCurrentVideoTrack.getMediaFormat().setInteger(
+                                MetaData.KEY_IS_CAMERA_CONTENT, 1);
+                    }
+                    break;
+                }
+                mCurrentOffset += nextBoxHeader.boxDataSize;
+            }
+        } catch (IOException e) {
+            if (LOGS_ENABLED) Log.e(TAG, "IOException while parsing UUID_PROF box", e);
+            return false;
+        }
+        return true;
+    }
+
     protected static class BoxHeader {
         public long startOffset = 0;
 
@@ -2525,10 +2808,16 @@ public class ISOBMFFParser extends MediaParser {
         ByteBuffer ppsBuffer;
     }
 
-    public class IsoTrack implements Track {
-        protected MetaDataImpl mMetaData;
+    protected static class SidxEntry {
+        long startTimeUs;
 
-        protected SampleTable mSampleTable;
+        long startOffset;
+    }
+
+    public class IsoTrack {
+        protected final MetaDataImpl mMetaData;
+
+        protected final SampleTable mSampleTable;
 
         protected int mTimeScale = 0;
 
@@ -2564,17 +2853,21 @@ public class ISOBMFFParser extends MediaParser {
 
         protected int mCurrentSampleDescriptionIndex = -1;
 
-        protected ArrayList<MediaFormat> mSampleDescriptionList;
+        protected final ArrayList<MediaFormat> mSampleDescriptionList;
 
         protected long mNextMoofOffset = 0;
 
         protected long mLastTimestampUs = 0;
 
+        protected long mSidxTimescale = 0;
+
+        protected ArrayList<SidxEntry> mSidxList = null;
+
         public IsoTrack() {
             mMetaData = new MetaDataImpl();
             mSampleTable = new SampleTable();
             mCurrentFragmentSampleQueue = null;
-            mSampleDescriptionList = new ArrayList<MediaFormat>(1);
+            mSampleDescriptionList = new ArrayList<>(1);
         }
 
         public boolean buildSampleTable() {
@@ -2599,7 +2892,7 @@ public class ISOBMFFParser extends MediaParser {
         public void addFragmentSamples(ArrayList<FragmentSample> fragmentSamples) {
             int numNewSamples = fragmentSamples.size();
             if (mCurrentFragmentSampleQueue == null) {
-                mCurrentFragmentSampleQueue = new ArrayDeque<FragmentSample>(numNewSamples);
+                mCurrentFragmentSampleQueue = new ArrayDeque<>(numNewSamples);
             }
             for (int i = 0; i < numNewSamples; i++) {
                 mCurrentFragmentSampleQueue.add(fragmentSamples.get(i));
@@ -2609,7 +2902,7 @@ public class ISOBMFFParser extends MediaParser {
         public void addCryptoInfos(ArrayList<CryptoInfo> cryptoInfos) {
             int numNewSamples = cryptoInfos.size();
             if (mCurrentCryptoInfoQueue == null) {
-                mCurrentCryptoInfoQueue = new ArrayDeque<CryptoInfo>(numNewSamples);
+                mCurrentCryptoInfoQueue = new ArrayDeque<>(numNewSamples);
             }
             for (int i = 0; i < numNewSamples; i++) {
                 mCurrentCryptoInfoQueue.add(cryptoInfos.get(i));
@@ -2774,76 +3067,8 @@ public class ISOBMFFParser extends MediaParser {
             if ((isAVC || isHEVC)
                     && (accessUnit.cryptoInfo == null
                     || accessUnit.cryptoInfo.numBytesOfClearData[0] > 0)) {
-                int srcOffset = 0;
-                int dstOffset = 0;
-                while (srcOffset < dataSize) {
-                    if ((srcOffset + mNALLengthSize) > dataSize) {
-                        if (LOGS_ENABLED) Log.e(TAG, "no room to add nal length");
-                        accessUnit.status = AccessUnit.ERROR;
-                        return accessUnit;
-                    }
-                    int nalLength = 0;
-
-                    if (mNALLengthSize == 1 || mNALLengthSize == 2) {
-                        if (mNALLengthSize == 1) {
-                            nalLength = accessUnit.data[srcOffset];
-                        } else if (mNALLengthSize == 2) {
-                            nalLength = ((accessUnit.data[srcOffset] & 0xff) << 8
-                                    | (accessUnit.data[srcOffset + 1] & 0xff));
-                        }
-                        byte[] tmpData = new byte[dataSize + (sNALHeaderSize -
-                                mNALLengthSize)];
-                        if (srcOffset > 0) {
-                            System.arraycopy(accessUnit.data, 0, tmpData, 0,
-                                    srcOffset);
-                        }
-                        System.arraycopy(accessUnit.data, srcOffset, tmpData,
-                                (sNALHeaderSize - mNALLengthSize) + srcOffset,
-                                accessUnit.data.length - srcOffset);
-                        accessUnit.data = tmpData;
-                        dataSize = accessUnit.data.length;
-                        accessUnit.size = dataSize;
-                    } else if (mNALLengthSize == 4) {
-                        nalLength = ((accessUnit.data[srcOffset] & 0xff) << 24
-                                | (accessUnit.data[srcOffset + 1] & 0xff) << 16
-                                | (accessUnit.data[srcOffset + 2] & 0xff) << 8
-                                | (accessUnit.data[srcOffset + 3] & 0xff));
-                    } else {
-                        if (LOGS_ENABLED)
-                            Log.e(TAG, "unsupported nal length size" + mNALLengthSize);
-                        accessUnit.status = AccessUnit.ERROR;
-                        return accessUnit;
-                    }
-                    srcOffset += sNALHeaderSize;
-                    if (accessUnit.cryptoInfo != null) {
-                        accessUnit.cryptoInfo.numBytesOfClearData[0] +=
-                                (sNALHeaderSize - mNALLengthSize);
-                    }
-                    if (srcOffset + nalLength > dataSize) {
-                        if (LOGS_ENABLED) Log.e(TAG, "error writing nal length");
-                        accessUnit.status = AccessUnit.ERROR;
-                        return accessUnit;
-                    }
-                    accessUnit.data[dstOffset++] = 0;
-                    accessUnit.data[dstOffset++] = 0;
-                    accessUnit.data[dstOffset++] = 0;
-                    accessUnit.data[dstOffset++] = 1;
-
-                    if (isAVC && (accessUnit.data[srcOffset] & 0x1f)
-                            == AVC_NAL_UNIT_TYPE_IDR_PICTURE) {
-                        accessUnit.isSyncSample = true;
-                    } else if (isHEVC) {
-                        int nalType = (accessUnit.data[srcOffset] & 0x7e) >> 1;
-
-                        if (nalType == HEVC_NAL_UNIT_TYPE_IDR_PICTURE_W_RADL
-                                || nalType == HEVC_NAL_UNIT_TYPE_IDR_PICTURE_N_LP
-                                || nalType == HEVC_NAL_UNIT_TYPE_CRA_PICTURE) {
-                            accessUnit.isSyncSample = true;
-                        }
-                    }
-
-                    srcOffset += nalLength;
-                    dstOffset += nalLength;
+                if (!addNALHeader(accessUnit, isAVC, isHEVC)) {
+                    return AccessUnit.ACCESS_UNIT_ERROR;
                 }
             } else if ((isAVC || isHEVC)
                     && accessUnit.cryptoInfo != null
@@ -2860,7 +3085,6 @@ public class ISOBMFFParser extends MediaParser {
             mType = trackType;
         }
 
-        @Override
         public TrackType getTrackType() {
             return mType;
         }
@@ -2897,7 +3121,6 @@ public class ISOBMFFParser extends MediaParser {
             return mTrackIndex;
         }
 
-        @Override
         public MetaDataImpl getMetaData() {
             return mMetaData;
         }
@@ -2918,17 +3141,13 @@ public class ISOBMFFParser extends MediaParser {
             mMediaFormat = format;
         }
 
-        @Override
         public MediaFormat getMediaFormat() {
             return mMediaFormat;
         }
 
         @Override
         public String toString() {
-            StringBuilder sb = new StringBuilder(32);
-            sb.append("TrackID = " + mTrackId + ",");
-            // sb.append("Track type = '"+ccruof(mType)+"'");
-            return sb.toString();
+            return "TrackID = " + mTrackId + "," + "Track type = " + mType;
         }
 
         public long seekTo(long seekTimeUs, boolean isFragmented) {
@@ -2956,7 +3175,25 @@ public class ISOBMFFParser extends MediaParser {
                 }
                 return mSampleTable.getTimeOfSample(mCurrentSampleIndex);
             } else {
-                if (mTfraList == null) {
+                if (mTfraList == null || mTfraList.isEmpty()) {
+                    if (mSidxList != null) {
+                        int sidxListLength = mSidxList.size();
+                        for (int i = 0; i < sidxListLength; i++) {
+                            SidxEntry sidxEntry = mSidxList.get(i);
+                            SidxEntry nextEntry = null;
+                            if (i + 1 < sidxListLength) {
+                                nextEntry = mSidxList.get(i + 1);
+                            }
+                            if (sidxEntry.startTimeUs < seekTimeUs && (nextEntry == null ||
+                                    nextEntry.startTimeUs > seekTimeUs)) {
+                                mCurrentFragmentSampleQueue = null;
+                                mNextMoofOffset = sidxEntry.startOffset;
+                                mTimeTicks = sidxEntry.startTimeUs * mSidxTimescale / 1000000;
+                                return sidxEntry.startTimeUs;
+                            }
+                        }
+                    }
+
                     mCurrentFragmentSampleQueue = null;
                     mNextMoofOffset = 0;
                     mTimeTicks = 0;
@@ -2968,7 +3205,7 @@ public class ISOBMFFParser extends MediaParser {
                 mCurrentSampleIndex = mSampleTable.getSampleCount();
 
                 int numTfra = mTfraList.size();
-                Tfra tfra = mTfraList.get(0);
+                Tfra tfra = null;
                 for (int i = 0; i < numTfra; i++) {
                     tfra = mTfraList.get(i);
                     long tfratimeUs = (tfra.timeTicks * 1000000 / mTimeScale);
@@ -3092,13 +3329,9 @@ public class ISOBMFFParser extends MediaParser {
                 }
 
                 if (mCurrentFragmentSampleQueue.isEmpty()) {
-                    if (mNextMoofOffset < 0) {
-                        // End of stream, return true so other tracks can run to
-                        // completion
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    // End of stream, return true so other tracks can run to
+                    // completion
+                    return mNextMoofOffset < 0;
                 }
 
                 FragmentSample sample = mCurrentFragmentSampleQueue.peek();
@@ -3167,6 +3400,94 @@ public class ISOBMFFParser extends MediaParser {
             }
             return true;
         }
+
+        public void setSidxTimescale(long timescale) {
+            mSidxTimescale = timescale;
+        }
+
+        public long getSidxTimeScale() {
+            return mSidxTimescale;
+        }
+
+        public void setSidxList(ArrayList<SidxEntry> list) {
+            mSidxList = list;
+        }
+    }
+
+    protected boolean addNALHeader(AccessUnit accessUnit, boolean isAVC, boolean isHEVC) {
+        int dataSize = accessUnit.size;
+        int srcOffset = 0;
+        int dstOffset = 0;
+        while (srcOffset < dataSize) {
+            if ((srcOffset + mNALLengthSize) > dataSize) {
+                if (LOGS_ENABLED) Log.e(TAG, "no room to add nal length");
+                accessUnit.status = AccessUnit.ERROR;
+                return false;
+            }
+            int nalLength = 0;
+
+            if (mNALLengthSize == 1 || mNALLengthSize == 2) {
+                if (mNALLengthSize == 1) {
+                    nalLength = accessUnit.data[srcOffset];
+                } else if (mNALLengthSize == 2) {
+                    nalLength = ((accessUnit.data[srcOffset] & 0xff) << 8
+                            | (accessUnit.data[srcOffset + 1] & 0xff));
+                }
+                byte[] tmpData = new byte[dataSize + (sNALHeaderSize -
+                        mNALLengthSize)];
+                if (srcOffset > 0) {
+                    System.arraycopy(accessUnit.data, 0, tmpData, 0,
+                            srcOffset);
+                }
+                System.arraycopy(accessUnit.data, srcOffset, tmpData,
+                        (sNALHeaderSize - mNALLengthSize) + srcOffset,
+                        accessUnit.data.length - srcOffset);
+                accessUnit.data = tmpData;
+                dataSize = accessUnit.data.length;
+                accessUnit.size = dataSize;
+            } else if (mNALLengthSize == 4) {
+                nalLength = ((accessUnit.data[srcOffset] & 0xff) << 24
+                        | (accessUnit.data[srcOffset + 1] & 0xff) << 16
+                        | (accessUnit.data[srcOffset + 2] & 0xff) << 8
+                        | (accessUnit.data[srcOffset + 3] & 0xff));
+            } else {
+                if (LOGS_ENABLED)
+                    Log.e(TAG, "Unsupported nal length size" + mNALLengthSize);
+                accessUnit.status = AccessUnit.ERROR;
+                return false;
+            }
+            srcOffset += sNALHeaderSize;
+            if (accessUnit.cryptoInfo != null) {
+                accessUnit.cryptoInfo.numBytesOfClearData[0] +=
+                        (sNALHeaderSize - mNALLengthSize);
+            }
+            if (srcOffset + nalLength > dataSize) {
+                if (LOGS_ENABLED) Log.e(TAG, "Error writing nal length");
+                accessUnit.status = AccessUnit.ERROR;
+                return false;
+            }
+            accessUnit.data[dstOffset++] = 0;
+            accessUnit.data[dstOffset++] = 0;
+            accessUnit.data[dstOffset++] = 0;
+            accessUnit.data[dstOffset++] = 1;
+
+            if (isAVC && (accessUnit.data[srcOffset] & 0x1f)
+                    == AVC_NAL_UNIT_TYPE_IDR_PICTURE) {
+                accessUnit.isSyncSample = true;
+            } else if (isHEVC) {
+                int nalType = (accessUnit.data[srcOffset] & 0x7e) >> 1;
+
+                if (nalType == HEVC_NAL_UNIT_TYPE_IDR_PICTURE_W_RADL
+                        || nalType == HEVC_NAL_UNIT_TYPE_IDR_PICTURE_N_LP
+                        || nalType == HEVC_NAL_UNIT_TYPE_CRA_PICTURE) {
+                    accessUnit.isSyncSample = true;
+                }
+            }
+
+            srcOffset += nalLength;
+            dstOffset += nalLength;
+        }
+        return true;
     }
 
     static class Trex {
@@ -3183,7 +3504,7 @@ public class ISOBMFFParser extends MediaParser {
         public int defaultSampleSize = Integer.MIN_VALUE;
     }
 
-    static class FragmentSample {
+    public static class FragmentSample {
         public int durationTicks = 0;
 
         public int size = 0;
@@ -3193,11 +3514,7 @@ public class ISOBMFFParser extends MediaParser {
         public long dataOffset = 0;
 
         public String toString() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("offset = " + dataOffset);
-            sb.append(", size = " + size);
-            sb.append(", duration = " + durationTicks);
-            return sb.toString();
+            return "offset = " + dataOffset + ", size = " + size + ", duration = " + durationTicks;
         }
     }
 
@@ -3213,7 +3530,7 @@ public class ISOBMFFParser extends MediaParser {
     public long getDurationUs() {
         long durationUs = 0;
         for (int i = 0; i < mTracks.size(); i++) {
-            long trackDurationUs = ((IsoTrack)mTracks.get(i)).getDurationUs();
+            long trackDurationUs = mTracks.get(i).getDurationUs();
             if (trackDurationUs > durationUs) {
                 durationUs = trackDurationUs;
             }
@@ -3244,7 +3561,7 @@ public class ISOBMFFParser extends MediaParser {
         TrackInfo[] trackInfos = new TrackInfo[numTracks];
 
         for (int i = 0; i < numTracks; i++) {
-            IsoTrack track = (IsoTrack)mTracks.get(i);
+            IsoTrack track = mTracks.get(i);
             TrackType trackType = track.getTrackType();
             if (trackType != TrackType.UNKNOWN) {
                 MediaFormat mediaFormat = track.getMediaFormat();
@@ -3252,7 +3569,7 @@ public class ISOBMFFParser extends MediaParser {
                 long durationUs = track.getDurationUs();
                 String language = track.getLanguage();
 
-                TrackRepresentation representation = null;
+                TrackRepresentation representation;
 
                 if (trackType == TrackType.AUDIO) {
                     int channelCount = mediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
@@ -3266,13 +3583,11 @@ public class ISOBMFFParser extends MediaParser {
                     representation = new TrackRepresentation(-1);
                 }
 
-                TrackInfo trackInfo = new TrackInfo(trackType, mimeType, durationUs, language);
-                TrackRepresentation[] representations = new TrackRepresentation[1];
-                representations[0] = representation;
-                trackInfo.setRepresentations(representations);
-                trackInfos[i] = trackInfo;
+                trackInfos[i] = new TrackInfo(trackType, mimeType, durationUs, language,
+                        new TrackRepresentation[] { representation });
             } else {
-                trackInfos[i] = new TrackInfo(TrackType.UNKNOWN, "", 0, "");
+                trackInfos[i] = new TrackInfo(TrackType.UNKNOWN, "", 0, "",
+                        new TrackRepresentation[] {});
             }
         }
 
@@ -3306,7 +3621,7 @@ public class ISOBMFFParser extends MediaParser {
             return TrackType.UNKNOWN;
         }
 
-        IsoTrack track = (IsoTrack)mTracks.get(index);
+        IsoTrack track = mTracks.get(index);
         TrackType trackType = track.getTrackType();
 
         if (trackType == TrackType.AUDIO) {
@@ -3406,16 +3721,16 @@ public class ISOBMFFParser extends MediaParser {
             mDataSource.skipBytes(4); // minor_version
             int numCompatibilityBrands = (int)((header.boxDataSize - 8) / 4);
             if (numCompatibilityBrands == 0) {
-                for (int j = 0; j < ISOBMFF_COMPATIBLE_BRANDS.length; j++) {
-                    if (ISOBMFF_COMPATIBLE_BRANDS[j] == majorBrand) {
+                for (int compatibleBrand : ISOBMFF_COMPATIBLE_BRANDS) {
+                    if (compatibleBrand == majorBrand) {
                         return true;
                     }
                 }
             }
             for (int i = 0; i < numCompatibilityBrands; i++) {
                 int brand = mDataSource.readInt();
-                for (int j = 0; j < ISOBMFF_COMPATIBLE_BRANDS.length; j++) {
-                    if (ISOBMFF_COMPATIBLE_BRANDS[j] == brand) {
+                for (int compatibleBrand : ISOBMFF_COMPATIBLE_BRANDS) {
+                    if (compatibleBrand == brand) {
                         return true;
                     }
                 }
@@ -3428,79 +3743,7 @@ public class ISOBMFFParser extends MediaParser {
         return false;
     }
 
-    /* MetaData interface functions */
-
-    @Override
-    public int getInteger(String key) {
-        if (mMetaDataValues.containsKey(key)) {
-            Integer val = (Integer)mMetaDataValues.get(key);
-            return val.intValue();
-        }
-        return Integer.MIN_VALUE;
-    }
-
-    @Override
-    public long getLong(String key) {
-        if (mMetaDataValues.containsKey(key)) {
-            Long val = (Long)(mMetaDataValues.get(key));
-            return val.longValue();
-        }
-        return Long.MIN_VALUE;
-    }
-
-    @Override
-    public float getFloat(String key) {
-        if (mMetaDataValues.containsKey(key)) {
-            Float val = (Float)(mMetaDataValues.get(key));
-            return val.floatValue();
-        }
-        return Float.MIN_VALUE;
-    }
-
-    @Override
-    public String getString(String key) {
-        Object value = mMetaDataValues.get(key);
-        if (value == null) {
-            return null;
-        }
-        return value.toString();
-    }
-
-    @Override
-    public String getString(String key1, String key2) {
-        // not applicable for this class
-        return null;
-    }
-
-    @Override
-    public byte[] getByteBuffer(String key) {
-        return (byte[])(mMetaDataValues.get(key));
-    }
-
-    @Override
-    public byte[] getByteBuffer(String key1, String key2) {
-        // not applicable for this class
-        return null;
-    }
-
-    @Override
-    public String[] getStringArray(String key) {
-        if (mMetaDataValues.containsKey(key)) {
-            Object[] values = (Object[])mMetaDataValues.get(key);
-            String[] strings = new String[values.length];
-            System.arraycopy(values, 0, strings, 0, values.length);
-            return strings;
-        }
-        return null;
-    }
-
-    @Override
-    public boolean containsKey(String key) {
-        return mMetaDataValues.containsKey(key);
-    }
-
-    @Override
-    protected Track createTrack() {
+    private IsoTrack createTrack() {
         return new IsoTrack();
     }
 
@@ -3511,8 +3754,8 @@ public class ISOBMFFParser extends MediaParser {
     private long findNextMoofForTrack(int trackId) {
         BoxHeader header;
         long moofOffset = Integer.MIN_VALUE;
-        boolean parseOk = true;
-        long sourceLength = -1;
+        boolean parseOk;
+        long sourceLength;
         try {
             sourceLength = mDataSource.length();
         } catch (IOException e) {
@@ -3541,15 +3784,13 @@ public class ISOBMFFParser extends MediaParser {
         return moofOffset;
     }
 
-    private int parseUE(BitReader br) {
+    private static int parseUE(BitReader br) {
         int leadingZeroBits = 0;
         while (br.getBits(1) == 0) {
             leadingZeroBits++;
         }
 
-        int codeNum = (1 << leadingZeroBits) - 1 + br.getBits(leadingZeroBits);
-
-        return codeNum;
+        return (1 << leadingZeroBits) - 1 + br.getBits(leadingZeroBits);
     }
 
     protected void parseSPS(byte[] spsData) {

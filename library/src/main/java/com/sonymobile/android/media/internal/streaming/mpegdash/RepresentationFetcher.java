@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.mpegdash;
+package com.sonymobile.android.media.internal.streaming.mpegdash;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -32,9 +32,10 @@ import com.sonymobile.android.media.TrackInfo.TrackType;
 import com.sonymobile.android.media.internal.AccessUnit;
 import com.sonymobile.android.media.internal.Configuration;
 import com.sonymobile.android.media.internal.DataSource;
-import com.sonymobile.android.media.internal.mpegdash.DASHISOParser.SubSegment;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.Representation;
-import com.sonymobile.android.media.internal.mpegdash.MPDParser.SegmentTimelineEntry;
+import com.sonymobile.android.media.internal.streaming.mpegdash.DASHISOParser.SubSegment;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Representation;
+import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.SegmentTimelineEntry;
+import com.sonymobile.android.media.internal.streaming.common.PacketSource;
 
 public class RepresentationFetcher {
 
@@ -42,7 +43,7 @@ public class RepresentationFetcher {
         INIT, SIDX, FRAGMENT
     }
 
-    public static final int SIDX_HEADER_SNIFF_SIZE = 200;
+    private static final int SIDX_HEADER_SNIFF_SIZE = 200;
 
     private static final boolean LOGS_ENABLED = Configuration.DEBUG || false;
 
@@ -50,15 +51,15 @@ public class RepresentationFetcher {
 
     private State mState = State.INIT;
 
-    private Representation mRepresentation;
+    private final Representation mRepresentation;
 
-    private PacketSource mPacketSource;
+    private final PacketSource mPacketSource;
 
-    private DASHSession mSession;
+    private final DASHSession mSession;
 
-    private DASHISOParser mParser = new DASHISOParser();
+    private final DASHISOParser mParser = new DASHISOParser();
 
-    private TrackType mType;
+    private final TrackType mType;
 
     private ArrayList<SubSegment> mSegmentIndex;
 
@@ -74,9 +75,9 @@ public class RepresentationFetcher {
 
     private long mSeekTimeUs = -1;
 
-    private long mTimeOffset;
+    private final long mTimeOffset;
 
-    private int mTrackIndex;
+    private final int mTrackIndex;
 
     private String mLastFragmentUri;
 
@@ -216,6 +217,12 @@ public class RepresentationFetcher {
                 updateSidxSize(mParser.getSidxSize());
                 if (err == DASHISOParser.ERROR_BUFFER_TO_SMALL) {
                     // Retry
+                    return;
+                } else if (err != DASHISOParser.OK) {
+                    if (LOGS_ENABLED) Log.e(TAG, "Error " + err + " while parsing sidx");
+                    Message callback = mSession.getFetcherCallbackMessage(mType);
+                    callback.arg1 = DASHSession.FETCHER_ERROR;
+                    callback.sendToTarget();
                     return;
                 }
 
@@ -425,15 +432,17 @@ public class RepresentationFetcher {
                         long timelineTimeUs = segmentTimelineTemplateTicks * 1000000L
                                 / mRepresentation.segmentTemplate.timescale;
 
-                        if (mSeek) {
-                            if (mSeekTimeUs >= timelineTimeUs
-                                    && mSeekTimeUs < timelineTimeUs + segmentDurationUs) {
-                                mNextTimeUs = timelineTimeUs + segmentDurationUs;
-                                found = true;
-                                break;
+                        if ((mSeek && mSeekTimeUs >= timelineTimeUs
+                                && mSeekTimeUs < timelineTimeUs + segmentDurationUs) ||
+                                timelineTimeUs >= mNextTimeUs) {
+                            try {
+                                source = DataSource.create(getTemplatedUri(
+                                        mRepresentation.segmentTemplate.media,
+                                        segmentTimelineTemplateTicks), bandwidthEstimator, true);
+                            } catch (IOException e) {
+                                return null;
                             }
-                        }
-                        if (timelineTimeUs >= mNextTimeUs) {
+
                             mNextTimeUs = timelineTimeUs + segmentDurationUs;
                             found = true;
                             break;
@@ -457,13 +466,6 @@ public class RepresentationFetcher {
 
                 mLastFragmentUri = getTemplatedUri(mRepresentation.segmentTemplate.media,
                         segmentTimelineTemplateTicks);
-                try {
-                    source = DataSource.create(
-                            getTemplatedUri(mRepresentation.segmentTemplate.media,
-                                    segmentTimelineTemplateTicks), bandwidthEstimator, true);
-                } catch (IOException e) {
-                    return null;
-                }
 
                 mCurrentTimeUs = segmentTimelineTemplateTicks * 1000000L
                         / mRepresentation.segmentTemplate.timescale;
@@ -502,7 +504,7 @@ public class RepresentationFetcher {
                 if (mRepresentation.segmentTemplate != null) {
                     if (mRepresentation.segmentTemplate.segmentTimeline != null) {
                         boolean found = false;
-                        long segmentTimelineTemplateTicks = 0;
+                        long segmentTimelineTemplateTicks;
                         for (SegmentTimelineEntry entry :
                                 mRepresentation.segmentTemplate.segmentTimeline) {
                             long segmentDurationUs = entry.durationTicks * 1000000L
@@ -518,7 +520,6 @@ public class RepresentationFetcher {
                                     if (mSeekTimeUs >= timelineTime
                                             && mSeekTimeUs < timelineTime + segmentDurationUs) {
                                         found = true;
-                                        mNextTimeUs = timelineTime + segmentDurationUs;
                                         try {
                                             source = DataSource.create(
                                                     getTemplatedUri(
@@ -529,10 +530,10 @@ public class RepresentationFetcher {
                                         } catch (IOException e) {
                                             return null;
                                         }
+                                        mNextTimeUs = timelineTime + segmentDurationUs;
                                     }
                                 } else if (timelineTime >= mNextTimeUs) {
                                     found = true;
-                                    mNextTimeUs = timelineTime + segmentDurationUs;
 
                                     mLastFragmentUri = getTemplatedUri(
                                             mRepresentation.segmentTemplate.media,
@@ -547,6 +548,7 @@ public class RepresentationFetcher {
                                     } catch (IOException e) {
                                         return null;
                                     }
+                                    mNextTimeUs = timelineTime + segmentDurationUs;
                                     break;
                                 }
 
@@ -558,7 +560,7 @@ public class RepresentationFetcher {
                             }
                         }
                     } else {
-                        mNextTimeUs = subsegment.timeUs + subsegment.durationUs;
+
                         mLastFragmentUri =
                                 getTemplatedUri(mRepresentation.segmentTemplate.media);
                         try {
@@ -568,6 +570,7 @@ public class RepresentationFetcher {
                         } catch (IOException e) {
                             return null;
                         }
+                        mNextTimeUs = subsegment.timeUs + subsegment.durationUs;
                     }
 
                     if (i == mSegmentIndex.size() - 1) {
@@ -576,7 +579,7 @@ public class RepresentationFetcher {
                         mSegmentIndex = null;
                     }
                 } else if (mRepresentation.segmentBase != null) {
-                    mNextTimeUs = subsegment.timeUs + subsegment.durationUs;
+
                     mLastFragmentUri = mRepresentation.segmentBase.url;
                     try {
                         source = DataSource.create(mRepresentation.segmentBase.url,
@@ -584,7 +587,7 @@ public class RepresentationFetcher {
                     } catch (IOException e) {
                         return null;
                     }
-
+                    mNextTimeUs = subsegment.timeUs + subsegment.durationUs;
                     if (i == mSegmentIndex.size() - 1) {
                         Message callback = mSession.getFetcherCallbackMessage(mType);
                         callback.arg1 = DASHSession.FETCHER_EOS;
@@ -603,13 +606,6 @@ public class RepresentationFetcher {
                 mCurrentTimeUs = subsegment.timeUs;
                 break;
             }
-        }
-
-        if (source == null) {
-            Message callback = mSession.getFetcherCallbackMessage(mType);
-            callback.arg1 = DASHSession.FETCHER_EOS;
-            callback.sendToTarget();
-            mEOS = true;
         }
 
         return source;
@@ -729,13 +725,9 @@ public class RepresentationFetcher {
     public boolean isBufferFull(long minBufferTime, int maxBufferDataSize) {
         // Assume previous moof is a good enough approximation of next moof
         long nextFragmentSize = mParser.getMoofDataSize();
-        if ((maxBufferDataSize > 0 &&
+        return (maxBufferDataSize > 0 &&
                 mPacketSource.getBufferSize() + nextFragmentSize > maxBufferDataSize)
-                || mPacketSource.getBufferDuration() > minBufferTime) {
-            return true;
-        }
-
-        return false;
+                || mPacketSource.getBufferDuration() > minBufferTime;
     }
 
     public long getNextTimeUs() {
