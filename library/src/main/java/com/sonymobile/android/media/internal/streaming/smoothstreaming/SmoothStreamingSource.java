@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Sony Mobile Communications Inc.
+ * Copyright (C) 2015 Sony Mobile Communications Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -14,7 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.streaming.mpegdash;
+package com.sonymobile.android.media.internal.streaming.smoothstreaming;
 
 import android.media.MediaFormat;
 import android.os.Handler;
@@ -34,13 +34,14 @@ import com.sonymobile.android.media.internal.MimeType;
 
 import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
+import java.util.Locale;
 import java.util.Vector;
 
-public class DASHSource extends MediaSource {
+public class SmoothStreamingSource extends MediaSource {
 
     private static final boolean LOGS_ENABLED = Configuration.DEBUG || false;
 
-    private static final String TAG = "DASHSource";
+    private static final String TAG = "SmoothStreamingSource";
 
     public static final int MSG_PREPARED = 0;
 
@@ -52,15 +53,13 @@ public class DASHSource extends MediaSource {
 
     public static final int MSG_CHANGE_SUBTITLE = 4;
 
-    public static final int MSG_REPRESENTATION_CHANGED = 5;
-
     public static final int MSG_ERROR = 6;
 
     private String mUrl;
 
     private HttpURLConnection mUrlConnection;
 
-    private DASHSession mSession;
+    private SmoothStreamingSession mSession;
 
     private EventHandler mEventHandler;
 
@@ -70,19 +69,15 @@ public class DASHSource extends MediaSource {
 
     private final int mMaxBufferSize;
 
-    public DASHSource(String url, Handler notify, int maxBufferSize) {
+    public SmoothStreamingSource(String url, Handler notify, int maxBufferSize) {
         super(notify);
 
         mUrl = url;
         mMaxBufferSize = maxBufferSize;
-
-        if (url.startsWith("vuabs://")
-                || url.startsWith("vuabss://")) {
-            mUrl = url.replaceFirst("vuabs", "http");
-        }
     }
 
-    public DASHSource(HttpURLConnection urlConnection, Handler notify, int maxBufferSize) {
+    public SmoothStreamingSource(HttpURLConnection urlConnection,
+                                 Handler notify, int maxBufferSize) {
         super(notify);
 
         mUrlConnection = urlConnection;
@@ -93,8 +88,8 @@ public class DASHSource extends MediaSource {
     public void prepareAsync() {
         mEventHandler = new EventHandler(new WeakReference<>(this));
 
-        mSession = new DASHSession(mEventHandler, mBandwidthEstimator, mRepresentationSelector,
-                mMaxBufferSize);
+        mSession = new SmoothStreamingSession(mEventHandler, mBandwidthEstimator,
+                mRepresentationSelector, mMaxBufferSize);
         mSession.connect(mUrl, mUrlConnection);
     }
 
@@ -105,8 +100,6 @@ public class DASHSource extends MediaSource {
 
     @Override
     public void stop() {
-        // TODO Auto-generated method stub
-
     }
 
     @Override
@@ -141,9 +134,9 @@ public class DASHSource extends MediaSource {
 
     private static class EventHandler extends Handler {
 
-        private final WeakReference<DASHSource> mSource;
+        private final WeakReference<SmoothStreamingSource> mSource;
 
-        public EventHandler(WeakReference<DASHSource> source) {
+        public EventHandler(WeakReference<SmoothStreamingSource> source) {
             super();
 
             mSource = source;
@@ -151,7 +144,7 @@ public class DASHSource extends MediaSource {
 
         @Override
         public void handleMessage(Message msg) {
-            DASHSource thiz = mSource.get();
+            SmoothStreamingSource thiz = mSource.get();
             switch (msg.what) {
                 case MSG_PREPARED:
                     thiz.notifyPrepared();
@@ -167,9 +160,6 @@ public class DASHSource extends MediaSource {
                     break;
                 case MSG_CHANGE_SUBTITLE:
                     thiz.notify(SOURCE_CHANGE_SUBTITLE, msg.arg1);
-                    break;
-                case MSG_REPRESENTATION_CHANGED:
-                    thiz.notify(SOURCE_REPRESENTATION_CHANGED, msg.obj);
                     break;
                 case MSG_ERROR:
                     thiz.notify(SOURCE_ERROR);
@@ -221,27 +211,23 @@ public class DASHSource extends MediaSource {
 
     @Override
     public Statistics getStatistics() {
-        return mSession.getStatistics();
-    }
-
-    public static boolean canHandle(String uri) {
-        return uri.startsWith("vuabs://") || uri.startsWith("vuabss://");
-    }
-
-    public static boolean canHandle(String mime, String uri) {
-        if (mime.equalsIgnoreCase(MimeType.MPEG_DASH)) {
-            return true;
-        }
-
-        if (uri.endsWith(".mpd") || uri.indexOf(".mpd?") > 0) {
-            return true;
-        }
-
-        return false;
+        return null;
     }
 
     @Override
     public boolean isStreaming() {
         return true;
+    }
+
+    public static boolean canHandle(String uri) {
+        return ((uri.startsWith("http://") || uri.startsWith("https://"))
+                && (uri.toLowerCase(Locale.US).endsWith("/manifest") ||
+                uri.toLowerCase(Locale.US).indexOf("/manifest?") > 0));
+    }
+
+    public static boolean canHandle(String mime, String uri) {
+        return mime.equalsIgnoreCase(MimeType.SMOOTH_STREAMING) ||
+                uri.toLowerCase(Locale.US).endsWith("/manifest") ||
+                uri.toLowerCase(Locale.US).contains("/manifest?");
     }
 }

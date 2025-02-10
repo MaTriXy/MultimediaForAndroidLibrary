@@ -34,5 +34,4 @@ public class MediaSource {
     public String getSource() {
         return mSource;
     }
-
 }

@@ -162,13 +162,7 @@ public final class SimpleSource extends MediaSource {
             try {
                 if (mMediaParser.hasDataAvailable(type)) {
                     if (mBuffering) {
-                        HttpBufferedDataSource httpBufferedDataSource =
-                                (HttpBufferedDataSource) mMediaParser.mDataSource;
-                        if (httpBufferedDataSource.getBufferedSize() <
-                                (((double)httpBufferedDataSource.length() /
-                                        mMediaParser.getDurationUs()) *
-                                        Configuration.HTTP_MIN_BUFFERING_DURATION_US)
-                                && !httpBufferedDataSource.isAtEndOfStream()) {
+                        if (mMediaParser.needMoreBuffer()) {
                             return AccessUnit.ACCESS_UNIT_NO_DATA_AVAILABLE;
                         }
                         mBuffering = false;
@@ -292,7 +286,7 @@ public final class SimpleSource extends MediaSource {
     }
 
     private void onCheckBuffering() {
-        int percentage = ((HttpBufferedDataSource)mMediaParser.mDataSource).getBuffering();
+        int percentage = mMediaParser.getBuffering();
 
         notify(SOURCE_BUFFERING_UPDATE, percentage);
 
@@ -303,6 +297,11 @@ public final class SimpleSource extends MediaSource {
             mBuffering = false;
             notify(SOURCE_BUFFERING_END);
         }
+    }
+
+    @Override
+    public boolean isStreaming() {
+        return mIsHttp;
     }
 
     private static class EventHandler extends Handler {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Sony Mobile Communications Inc.
+ * Copyright (C) 2015 Sony Mobile Communications Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -14,16 +14,7 @@
  * the License.
  */
 
-package com.sonymobile.android.media.internal.streaming.mpegdash;
-
-import java.io.IOException;
-import java.lang.ref.WeakReference;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.EnumMap;
-import java.util.Map;
-import java.util.Vector;
+package com.sonymobile.android.media.internal.streaming.smoothstreaming;
 
 import android.media.MediaFormat;
 import android.os.Bundle;
@@ -34,9 +25,7 @@ import android.os.Message;
 import android.util.Log;
 
 import com.sonymobile.android.media.BandwidthEstimator;
-import com.sonymobile.android.media.DASHTrackInfo;
 import com.sonymobile.android.media.MediaError;
-import com.sonymobile.android.media.MediaPlayer.Statistics;
 import com.sonymobile.android.media.MetaData;
 import com.sonymobile.android.media.RepresentationSelector;
 import com.sonymobile.android.media.TrackInfo;
@@ -45,17 +34,25 @@ import com.sonymobile.android.media.internal.AccessUnit;
 import com.sonymobile.android.media.internal.Configuration;
 import com.sonymobile.android.media.internal.MetaDataImpl;
 import com.sonymobile.android.media.internal.MimeType;
-import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.ContentProtection;
-import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Period;
-import com.sonymobile.android.media.internal.streaming.mpegdash.MPDParser.Representation;
 import com.sonymobile.android.media.internal.streaming.common.DefaultBandwidthEstimator;
+import com.sonymobile.android.media.internal.streaming.common.DefaultRepresentationSelector;
 import com.sonymobile.android.media.internal.streaming.common.PacketSource;
+import com.sonymobile.android.media.internal.streaming.smoothstreaming.ManifestParser.QualityLevel;
 
-public final class DASHSession {
+import java.io.IOException;
+import java.lang.ref.WeakReference;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.Vector;
+
+public final class SmoothStreamingSession {
 
     private static final boolean LOGS_ENABLED = Configuration.DEBUG || false;
 
-    private static final String TAG = "DASHSession";
+    private static final String TAG = "SmoothStreamingSession";
 
     private static final int MSG_CONNECT = 0;
 
@@ -77,17 +74,11 @@ public final class DASHSession {
 
     public static final int FETCHER_TIME_ESTABLISHED = 2;
 
-    public static final int FETCHER_DRM_INFO = 3;
-
-    public static final int FETCHER_UPDATE_STATISTICS = 4;
-
     public static final String KEY_TIMEUS = "timeus";
 
-    public static final String KEY_REMOTE_IP = "remoteIP";
-
-    public static final String KEY_VIDEO_URI = "videoURI";
-
     private static final int MAX_BUFFER_DURATION_US = 10000000;
+
+    private static final int MIN_BUFFER_DURATION_US = 4000000;
 
     private final HandlerThread mEventThread;
 
@@ -95,11 +86,12 @@ public final class DASHSession {
 
     private final Handler mCallbackHandler;
 
-    private MPDParser mMPDParser;
+    private ManifestParser mManifestParser;
 
     private boolean mBuffering = true;
 
-    private final EnumMap<TrackType, RepresentationFetcher> mFetchers = new EnumMap<>(TrackType.class);
+    private final EnumMap<TrackType, QualityLevelFetcher> mFetchers =
+            new EnumMap<>(TrackType.class);
 
     private final EnumMap<TrackType, PacketSource> mPacketSources = new EnumMap<>(TrackType.class);
 
@@ -113,24 +105,18 @@ public final class DASHSession {
 
     private boolean mSeekPending = false;
 
-    private String mVideoServerIP;
-
-    private String mVideoURI;
-
     private final int mMaxBufferSize;
 
     private final int[] mMaxBufferSizes;
 
-    private long mLastMPDFetchTimeMs;
+    private byte[] mDefaultKID;
 
-    private String mMPDUrl;
-
-    public DASHSession(Handler callbackHandler, BandwidthEstimator estimator,
-            RepresentationSelector selector, int maxBufferSize) {
+    public SmoothStreamingSession(Handler callbackHandler, BandwidthEstimator estimator,
+                                  RepresentationSelector selector, int maxBufferSize) {
 
         mCallbackHandler = callbackHandler;
 
-        mEventThread = new HandlerThread("DASH");
+        mEventThread = new HandlerThread("SmoothStreaming");
         mEventThread.start();
 
         mEventHandler = new EventHandler(new WeakReference<>(this),
@@ -178,24 +164,24 @@ public final class DASHSession {
         }
 
         if (mBuffering) {
-            long minBufferTimeUs = mMPDParser.getMinBufferTimeUs();
+
             PacketSource audioPacketSource = mPacketSources.get(TrackType.AUDIO);
 
-            if (audioPacketSource.getBufferDuration() < minBufferTimeUs
+            if (audioPacketSource.getBufferDuration() < MIN_BUFFER_DURATION_US
                     && (mFetchers.containsKey(TrackType.AUDIO) || mSeekPending)) {
                 return AccessUnit.ACCESS_UNIT_NO_DATA_AVAILABLE;
             }
 
             PacketSource videoPacketSource = mPacketSources.get(TrackType.VIDEO);
 
-            if (videoPacketSource.getBufferDuration() < minBufferTimeUs
+            if (videoPacketSource.getBufferDuration() < MIN_BUFFER_DURATION_US
                     && mFetchers.containsKey(TrackType.VIDEO)) {
                 return AccessUnit.ACCESS_UNIT_NO_DATA_AVAILABLE;
             }
 
             mBuffering = false;
 
-            mCallbackHandler.obtainMessage(DASHSource.MSG_BUFFERING_END).sendToTarget();
+            mCallbackHandler.obtainMessage(SmoothStreamingSource.MSG_BUFFERING_END).sendToTarget();
         }
 
         PacketSource packetSource = mPacketSources.get(type);
@@ -204,7 +190,8 @@ public final class DASHSession {
             if (type != TrackType.SUBTITLE) {
                 mBuffering = true;
 
-                mCallbackHandler.obtainMessage(DASHSource.MSG_BUFFERING_START).sendToTarget();
+                mCallbackHandler.
+                        obtainMessage(SmoothStreamingSource.MSG_BUFFERING_START).sendToTarget();
             }
 
             if (LOGS_ENABLED) Log.e(TAG, "No data available");
@@ -227,14 +214,14 @@ public final class DASHSession {
     }
 
     public int getMaxVideoInputSize() {
-        return mMPDParser.getMaxVideoInputBufferSize();
+        return mManifestParser.getMaxVideoInputBufferSize();
     }
 
     private static class EventHandler extends Handler {
 
-        private final WeakReference<DASHSession> mSession;
+        private final WeakReference<SmoothStreamingSession> mSession;
 
-        public EventHandler(WeakReference<DASHSession> session, Looper looper) {
+        public EventHandler(WeakReference<SmoothStreamingSession> session, Looper looper) {
             super(looper);
 
             mSession = session;
@@ -242,7 +229,7 @@ public final class DASHSession {
 
         @Override
         public void handleMessage(Message msg) {
-            DASHSession thiz = mSession.get();
+            SmoothStreamingSession thiz = mSession.get();
             switch (msg.what) {
                 case MSG_CONNECT:
                     thiz.onConnect(msg);
@@ -259,107 +246,43 @@ public final class DASHSession {
                         case FETCHER_EOS: {
                             PacketSource packetSource = thiz.mPacketSources.get(type);
 
-                            if (!thiz.mMPDParser.hasNextPeriod() &&
-                                    thiz.mMPDParser.isDynamicWaitingForUpdate()) {
-                                // This is a dynamic stream.
-                                // Wait for more data to be added to the MPD.
-                                break;
-                            }
-
                             thiz.mFetchers.remove(type);
 
-                            if (!thiz.mMPDParser.hasNextPeriod()) {
-                                packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_END_OF_STREAM);
-                                if (thiz.mFetchers.size() == 0 &&
-                                        packetSource.getFormat() == null) {
-                                    if (thiz.mSeekPending) {
-                                        thiz.mCallbackHandler.obtainMessage(DASHSource
-                                                .SOURCE_BUFFERING_END).sendToTarget();
-                                        PacketSource audioPacketSource = thiz.mPacketSources
-                                                .get(TrackType.AUDIO);
-                                        PacketSource subtitlePacketSource = thiz.mPacketSources
-                                                .get(TrackType.SUBTITLE);
-                                        audioPacketSource.queueAccessUnit(
-                                                AccessUnit.ACCESS_UNIT_END_OF_STREAM);
-                                        subtitlePacketSource.queueAccessUnit(
-                                                AccessUnit.ACCESS_UNIT_END_OF_STREAM);
-                                        thiz.mSeekPending = false;
-                                    } else {
-                                        thiz.mCallbackHandler.obtainMessage(DASHSource.MSG_ERROR)
-                                                .sendToTarget();
-                                    }
-                                }
-                            } else if (thiz.mFetchers.size() == 0) {
-                                thiz.mMPDParser.nextPeriod();
-
-                                int[] selectedRepresentations = thiz.mMPDParser
-                                        .getSelectedRepresentations();
-                                int[] selectedTracks = thiz.mMPDParser.getSelectedTracks();
-                                thiz.mRepresentationSelector
-                                        .selectRepresentations(
-                                                thiz.mBandwidthEstimator.getEstimatedBandwidth(),
-                                                selectedTracks,
-                                                selectedRepresentations);
-                                thiz.mMPDParser.updateRepresentations(selectedRepresentations);
-                                thiz.changeConfiguration(-1);
-                            }
+                            packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_END_OF_STREAM);
                             break;
                         }
                         case FETCHER_TIME_ESTABLISHED: {
                             Bundle data = msg.getData();
                             long videoTimeUs = data.getLong(KEY_TIMEUS, 0);
 
-                            Representation audioRepresentation = thiz.mMPDParser
-                                    .getRepresentation(TrackType.AUDIO);
+                            QualityLevel audioQualityLevel = thiz.mManifestParser
+                                    .getQualityLevel(TrackType.AUDIO);
 
-                            if (audioRepresentation != null) {
-                                thiz.addFetcher(TrackType.AUDIO, audioRepresentation, videoTimeUs);
+                            if (audioQualityLevel != null) {
+                                thiz.addFetcher(TrackType.AUDIO, audioQualityLevel, videoTimeUs);
                             }
 
                             thiz.mLastDequeuedTimeUs = videoTimeUs;
                             thiz.mSeekPending = false;
 
-                            Representation subtitleRepresentation = thiz.mMPDParser
-                                    .getRepresentation(TrackType.SUBTITLE);
+                            QualityLevel subtitleQualityLevel = thiz.mManifestParser
+                                    .getQualityLevel(TrackType.SUBTITLE);
 
-                            if (subtitleRepresentation != null) {
-                                thiz.addFetcher(TrackType.SUBTITLE, subtitleRepresentation,
+                            if (subtitleQualityLevel != null) {
+                                thiz.addFetcher(TrackType.SUBTITLE, subtitleQualityLevel,
                                         videoTimeUs);
                             }
 
                             break;
                         }
                         case FETCHER_ERROR: {
-                            PacketSource audioPacketSource = thiz.mPacketSources.
-                                    get(TrackType.AUDIO);
-                            PacketSource videoPacketSource = thiz.mPacketSources.
-                                    get(TrackType.VIDEO);
+                            if (LOGS_ENABLED) Log.e(TAG, "Fetcher reported error");
+                            PacketSource packetSource = thiz.mPacketSources.get(type);
 
-                            boolean audioOnly = thiz.mMPDParser.
-                                    getRepresentation(TrackType.VIDEO) == null;
-
-                            if (!audioPacketSource.hasBufferAvailable() || (!audioOnly &&
-                                    !videoPacketSource.hasBufferAvailable())) {
-                                if (LOGS_ENABLED) Log.e(TAG, "Fetcher reported error");
-                                PacketSource packetSource = thiz.mPacketSources.get(type);
-                                thiz.mCallbackHandler.obtainMessage(DASHSource.MSG_ERROR)
-                                        .sendToTarget();
-                                packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_ERROR);
-                                thiz.mFetchers.remove(type);
-                            }
-
-                            break;
-                        }
-                        case FETCHER_DRM_INFO: {
-                            thiz.mMetaData.addValue(MetaData.KEY_DRM_UUID,
-                                    msg.getData().getByteArray(MetaData.KEY_DRM_UUID));
-                            thiz.mMetaData.addValue(MetaData.KEY_DRM_PSSH_DATA, msg.getData()
-                                    .getByteArray(MetaData.KEY_DRM_PSSH_DATA));
-                            break;
-                        }
-                        case FETCHER_UPDATE_STATISTICS: {
-                            thiz.mVideoServerIP = msg.getData().getString(KEY_REMOTE_IP);
-                            thiz.mVideoURI = msg.getData().getString(KEY_VIDEO_URI);
+                            thiz.mCallbackHandler.obtainMessage(SmoothStreamingSource.MSG_ERROR)
+                                    .sendToTarget();
+                            packetSource.queueAccessUnit(AccessUnit.ACCESS_UNIT_ERROR);
+                            thiz.mFetchers.remove(type);
                             break;
                         }
                         default:
@@ -372,9 +295,9 @@ public final class DASHSession {
                     break;
                 case MSG_DISCONNECT:
                     if (thiz.mEventThread != null) {
-                        for (Map.Entry<TrackType, RepresentationFetcher> item : thiz.mFetchers
+                        for (Map.Entry<TrackType, QualityLevelFetcher> item : thiz.mFetchers
                                 .entrySet()) {
-                            RepresentationFetcher fetcher = item.getValue();
+                            QualityLevelFetcher fetcher = item.getValue();
                             fetcher.release();
                         }
                         thiz.mEventThread.quitSafely();
@@ -393,9 +316,9 @@ public final class DASHSession {
     private void onConnect(Message msg) {
         boolean success = false;
         int error = MediaError.UNKNOWN;
-        String uri;
-        HttpURLConnection urlConnection;
         try {
+            String uri;
+            HttpURLConnection urlConnection;
             if (msg.obj instanceof HttpURLConnection) {
                 urlConnection = (HttpURLConnection)msg.obj;
                 uri = urlConnection.getURL().toString();
@@ -407,9 +330,7 @@ public final class DASHSession {
             if (LOGS_ENABLED) Log.i(TAG, "onConnect " + uri);
 
             if (urlConnection.getResponseCode() / 100 == 2) {
-
-                mMPDUrl = uri;
-                mMPDParser = new MPDParser(uri);
+                mManifestParser = new ManifestParser(uri);
 
                 if (mBandwidthEstimator == null) {
                     mBandwidthEstimator = new DefaultBandwidthEstimator();
@@ -418,38 +339,38 @@ public final class DASHSession {
                 if (mRepresentationSelector == null) {
                     // Fall back to default.
                     mRepresentationSelector =
-                            new DefaultDASHRepresentationSelector(mMPDParser, mMaxBufferSize);
+                            new DefaultRepresentationSelector(mMaxBufferSize);
                 }
 
-                success = mMPDParser.parse(urlConnection.getInputStream());
+                success = mManifestParser.parse(urlConnection.getInputStream());
                 if (success) {
-                    mMetaData.addValue(MetaData.KEY_MIME_TYPE, MimeType.MPEG_DASH);
-                    mMetaData.addValue(MetaData.KEY_MPD, mMPDParser.getMPDFile());
+                    mMetaData.addValue(MetaData.KEY_MIME_TYPE, MimeType.SMOOTH_STREAMING);
 
-                    boolean isLive = mMPDParser.getDurationUs() == -1;
-                    ContentProtection contentProtection = mMPDParser.getContentProtection();
-                    if (contentProtection != null ) {
-                        if (contentProtection.uuid != null) {
-                            mMetaData.addValue(MetaData.KEY_DRM_UUID, contentProtection.uuid);
+                    ManifestParser.Protection protection = mManifestParser.getProtection();
+                    if (protection != null ) {
+                        if (protection.uuid != null) {
+                            mMetaData.addValue(MetaData.KEY_DRM_UUID, protection.uuid);
                         }
-                        if (contentProtection.psshData != null) {
-                            mMetaData.addValue(MetaData.KEY_DRM_PSSH_DATA,
-                                    contentProtection.psshData);
+                        if (protection.content != null) {
+                            mMetaData.addValue(MetaData.KEY_DRM_PSSH_DATA, protection.content);
                         }
+
+                        mDefaultKID = protection.kID;
                     }
+                    boolean isLive = mManifestParser.getDurationUs() == -1;
                     mMetaData.addValue(MetaData.KEY_PAUSE_AVAILABLE, isLive ? 0 : 1);
                     mMetaData.addValue(MetaData.KEY_SEEK_AVAILABLE, isLive ? 0 : 1);
 
-                    mCallbackHandler.obtainMessage(DASHSource.MSG_PREPARED).sendToTarget();
+                    mCallbackHandler.
+                            obtainMessage(SmoothStreamingSource.MSG_PREPARED).sendToTarget();
 
-                    int[] selectedRepresentations = mMPDParser.getSelectedRepresentations();
-                    int[] selectedTracks = mMPDParser.getSelectedTracks();
-                    TrackInfo[] trackInfo = mMPDParser.getTrackInfo();
+                    int[] selectedQualityLevels = mManifestParser.getSelectedQualityLevels();
+                    int[] selectedTracks = mManifestParser.getSelectedTracks();
+                    TrackInfo[] trackInfo = mManifestParser.getTrackInfo();
                     mRepresentationSelector.selectDefaultRepresentations(selectedTracks, trackInfo,
-                            selectedRepresentations);
-                    mMPDParser.updateRepresentations(selectedRepresentations);
+                            selectedQualityLevels);
+                    mManifestParser.updateQualityLevels(selectedQualityLevels);
                     changeConfiguration(0);
-                    mLastMPDFetchTimeMs = System.currentTimeMillis();
                 } else {
                     error = MediaError.MALFORMED;
                 }
@@ -467,7 +388,8 @@ public final class DASHSession {
         }
 
         if (!success) {
-            mCallbackHandler.obtainMessage(DASHSource.MSG_PREPARE_FAILED, error, 0).sendToTarget();
+            mCallbackHandler.obtainMessage(SmoothStreamingSource.MSG_PREPARE_FAILED,
+                    error, 0).sendToTarget();
         }
     }
 
@@ -475,16 +397,16 @@ public final class DASHSession {
         mPacketSources.get(type).clear();
         mFetchers.remove(type);
 
-        int[] selectedRepresentations = mMPDParser.getSelectedRepresentations();
-        int[] selectedTracks = mMPDParser.getSelectedTracks();
+        int[] selectedQualityLevels = mManifestParser.getSelectedQualityLevels();
+        int[] selectedTracks = mManifestParser.getSelectedTracks();
         mRepresentationSelector.selectRepresentations(mBandwidthEstimator.getEstimatedBandwidth(),
-                selectedTracks, selectedRepresentations);
-        mMPDParser.updateRepresentation(type, selectedRepresentations[type.ordinal()]);
+                selectedTracks, selectedQualityLevels);
+        mManifestParser.updateQualityLevel(type, selectedQualityLevels[type.ordinal()]);
 
-        Representation representation = mMPDParser.getRepresentation(type);
+        QualityLevel qualityLevel = mManifestParser.getQualityLevel(type);
 
-        if (!mSeekPending && representation != null) {
-            addFetcher(type, representation, mLastDequeuedTimeUs);
+        if (!mSeekPending && qualityLevel != null) {
+            addFetcher(type, qualityLevel, mLastDequeuedTimeUs);
         }
     }
 
@@ -497,16 +419,9 @@ public final class DASHSession {
             return;
         }
 
-        long minUpdatePeriodUs = mMPDParser.getMinUpdatePeriodUs();
-        if (minUpdatePeriodUs > -1 &&
-                mLastMPDFetchTimeMs + (minUpdatePeriodUs / 1000) < System.currentTimeMillis()) {
-            updateMPD();
-            mLastMPDFetchTimeMs = System.currentTimeMillis();
-        }
-
-        RepresentationFetcher selectedFetcher = null;
-        for (Map.Entry<TrackType, RepresentationFetcher> item : mFetchers.entrySet()) {
-            RepresentationFetcher fetcher = item.getValue();
+        QualityLevelFetcher selectedFetcher = null;
+        for (Map.Entry<TrackType, QualityLevelFetcher> item : mFetchers.entrySet()) {
+            QualityLevelFetcher fetcher = item.getValue();
             TrackType type = item.getKey();
             int maxBufferSize = mMaxBufferSizes[type.ordinal()];
 
@@ -515,9 +430,7 @@ public final class DASHSession {
                     selectedFetcher = fetcher;
                 }
             } else if (!fetcher.isBufferFull(MAX_BUFFER_DURATION_US, maxBufferSize) &&
-                    (fetcher.getNextTimeUs() < selectedFetcher.getNextTimeUs() ||
-                    (fetcher.getNextTimeUs() == selectedFetcher.getNextTimeUs() &&
-                    fetcher.getState() < selectedFetcher.getState()))) {
+                    (fetcher.getNextTimeUs() < selectedFetcher.getNextTimeUs())) {
                 selectedFetcher = fetcher;
             }
         }
@@ -533,84 +446,61 @@ public final class DASHSession {
         }
     }
 
-    private boolean updateMPD() {
-        try {
-            URL url = new URL(mMPDUrl);
-            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-
-            if (urlConnection.getResponseCode() / 100 == 2) {
-                return mMPDParser.update(urlConnection.getInputStream());
-            } else {
-                if (LOGS_ENABLED)Log.e(TAG, "HTTP error " + urlConnection.getResponseCode() +
-                        " while updating MPD");
-            }
-        } catch (MalformedURLException e) {
-            if (LOGS_ENABLED) Log.e(TAG, "MalformedURLException in updateMPD", e);
-        } catch (IOException e) {
-            if (LOGS_ENABLED) Log.e(TAG, "IOException in updateMPD", e);
-        }
-
-        return false;
-    }
-
     private void changeConfiguration(long timeUs) {
         mEventHandler.removeMessages(MSG_DOWNLOAD_NEXT);
 
-        Representation audioRepresentation = mMPDParser.getRepresentation(TrackType.AUDIO);
+        QualityLevel audioQualityLevel = mManifestParser.getQualityLevel(TrackType.AUDIO);
 
-        Representation videoRepresentation = mMPDParser.getRepresentation(TrackType.VIDEO);
+        QualityLevel videoQualityLevel = mManifestParser.getQualityLevel(TrackType.VIDEO);
 
-        Representation subtitleRepresentation = mMPDParser.getRepresentation(TrackType.SUBTITLE);
+        QualityLevel subtitleQualityLevel = mManifestParser.getQualityLevel(TrackType.SUBTITLE);
 
-        RepresentationFetcher audioFetcher = mFetchers.get(TrackType.AUDIO);
+        if (audioQualityLevel == null && videoQualityLevel == null) {
+            if (LOGS_ENABLED) Log.e(TAG, "No quality levels available");
+            mCallbackHandler.obtainMessage(SmoothStreamingSource.MSG_ERROR).sendToTarget();
+            return;
+        }
+
+        QualityLevelFetcher audioFetcher = mFetchers.get(TrackType.AUDIO);
 
         if (audioFetcher != null
-                && (timeUs > -1 || audioFetcher.getRepresentation() != audioRepresentation)) {
+                && (timeUs > -1 || audioFetcher.getQualityLevel() != audioQualityLevel)) {
             mFetchers.remove(TrackType.AUDIO);
             audioFetcher = null;
         }
 
-        RepresentationFetcher videoFetcher = mFetchers.get(TrackType.VIDEO);
+        QualityLevelFetcher videoFetcher = mFetchers.get(TrackType.VIDEO);
 
         if (videoFetcher != null
-                && (timeUs > -1 || videoFetcher.getRepresentation() != videoRepresentation)) {
-            if (videoRepresentation != null) {
-                if (videoRepresentation.segmentBase != null) {
-                    mVideoURI = videoRepresentation.segmentBase.url;
-                }
-
-                mCallbackHandler.obtainMessage(DASHSource.MSG_REPRESENTATION_CHANGED,
-                        getStatistics()).sendToTarget();
-            }
-
+                && (timeUs > -1 || videoFetcher.getQualityLevel() != videoQualityLevel)) {
             mFetchers.remove(TrackType.VIDEO);
             videoFetcher = null;
         }
 
-        RepresentationFetcher subtitleFetcher = mFetchers.get(TrackType.SUBTITLE);
+        QualityLevelFetcher subtitleFetcher = mFetchers.get(TrackType.SUBTITLE);
 
         if (subtitleFetcher != null
-                && (timeUs > -1 || subtitleFetcher.getRepresentation() != subtitleRepresentation)) {
+                && (timeUs > -1 || subtitleFetcher.getQualityLevel() != subtitleQualityLevel)) {
             mFetchers.remove(TrackType.SUBTITLE);
             subtitleFetcher = null;
         }
 
-        mCallbackHandler.obtainMessage(DASHSource.MSG_CHANGE_SUBTITLE,
-                subtitleRepresentation != null ? 1 : 0, 0).sendToTarget();
+        mCallbackHandler.obtainMessage(SmoothStreamingSource.MSG_CHANGE_SUBTITLE,
+                subtitleQualityLevel != null ? 1 : 0, 0).sendToTarget();
 
-        if (videoFetcher == null && videoRepresentation != null) {
-            addFetcher(TrackType.VIDEO, videoRepresentation, timeUs);
+        if (videoFetcher == null && videoQualityLevel != null) {
+            addFetcher(TrackType.VIDEO, videoQualityLevel, timeUs);
             if (timeUs > 0) {
                 mSeekPending = true;
             }
         }
 
-        if (!mSeekPending && audioFetcher == null && audioRepresentation != null) {
-            addFetcher(TrackType.AUDIO, audioRepresentation, timeUs);
+        if (!mSeekPending && audioFetcher == null && audioQualityLevel != null) {
+            addFetcher(TrackType.AUDIO, audioQualityLevel, timeUs);
         }
 
-        if (!mSeekPending && subtitleFetcher == null && subtitleRepresentation != null) {
-            addFetcher(TrackType.SUBTITLE, subtitleRepresentation, timeUs);
+        if (!mSeekPending && subtitleFetcher == null && subtitleQualityLevel != null) {
+            addFetcher(TrackType.SUBTITLE, subtitleQualityLevel, timeUs);
         }
 
         if (mMaxBufferSize > 0) {
@@ -620,31 +510,33 @@ public final class DASHSession {
             mMaxBufferSizes[TrackType.SUBTITLE.ordinal()] = 0;
             int totalBandwidth = 0;
 
-            if (videoRepresentation != null) {
-                totalBandwidth += videoRepresentation.bandwidth;
+            if (videoQualityLevel != null) {
+                totalBandwidth += videoQualityLevel.bitrate;
             }
-            if (audioRepresentation != null) {
-                totalBandwidth += audioRepresentation.bandwidth;
+            if (audioQualityLevel != null) {
+                totalBandwidth += audioQualityLevel.bitrate;
             }
-            if (subtitleRepresentation != null) {
-                totalBandwidth += subtitleRepresentation.bandwidth;
+            if (subtitleQualityLevel != null) {
+                totalBandwidth += subtitleQualityLevel.bitrate;
             }
 
-            if (subtitleRepresentation != null) {
-                double bufferShare = ((double)subtitleRepresentation.bandwidth) / totalBandwidth;
-                mMaxBufferSizes[TrackType.SUBTITLE.ordinal()] = (int)(mMaxBufferSize * bufferShare);
+            if (subtitleQualityLevel != null) {
+                double bufferShare = ((double)subtitleQualityLevel.bitrate) / totalBandwidth;
+                mMaxBufferSizes[TrackType.SUBTITLE.ordinal()] =
+                        (int)(mMaxBufferSize * bufferShare);
             }
-            if (audioRepresentation != null) {
-                if (videoRepresentation == null) {
+            if (audioQualityLevel != null) {
+                if (videoQualityLevel == null) {
                     // no video, let audio have all remaining buffer
                     mMaxBufferSizes[TrackType.AUDIO.ordinal()] = mMaxBufferSize
                             - mMaxBufferSizes[TrackType.SUBTITLE.ordinal()];
                 } else {
-                    double bufferShare = ((double)audioRepresentation.bandwidth) / totalBandwidth;
-                    mMaxBufferSizes[TrackType.AUDIO.ordinal()] = (int)(mMaxBufferSize * bufferShare);
+                    double bufferShare = ((double)audioQualityLevel.bitrate) / totalBandwidth;
+                    mMaxBufferSizes[TrackType.AUDIO.ordinal()] =
+                            (int)(mMaxBufferSize * bufferShare);
                 }
             }
-            if (videoRepresentation != null) {
+            if (videoQualityLevel != null) {
                 // let video have all remaining buffer
                 mMaxBufferSizes[TrackType.VIDEO.ordinal()] = mMaxBufferSize -
                         mMaxBufferSizes[TrackType.AUDIO.ordinal()] -
@@ -660,7 +552,6 @@ public final class DASHSession {
     private void onSeek(long timeUs) {
         mSeekPending = false;
         mEventHandler.removeMessages(MSG_FETCHER_CALLBACK);
-        mMPDParser.seekTo(timeUs);
 
         mPacketSources.get(TrackType.AUDIO).clear();
         mPacketSources.get(TrackType.VIDEO).clear();
@@ -670,30 +561,30 @@ public final class DASHSession {
         mPacketSources.get(TrackType.VIDEO).setClosed(false);
         mPacketSources.get(TrackType.SUBTITLE).setClosed(false);
 
-        int[] selectedRepresentations = mMPDParser.getSelectedRepresentations();
-        int[] selectedTracks = mMPDParser.getSelectedTracks();
+        int[] selectedRepresentations = mManifestParser.getSelectedQualityLevels();
+        int[] selectedTracks = mManifestParser.getSelectedTracks();
         mRepresentationSelector.selectRepresentations(
                 mBandwidthEstimator.getEstimatedBandwidth(),
                 selectedTracks,
                 selectedRepresentations);
-        mMPDParser.updateRepresentations(selectedRepresentations);
+        mManifestParser.updateQualityLevels(selectedRepresentations);
 
         changeConfiguration(timeUs);
     }
 
-    private void addFetcher(TrackType type, Representation representation, long nextTimeUs) {
+    private void addFetcher(TrackType type, QualityLevel qualityLevel, long nextTimeUs) {
         if (mFetchers.containsKey(type)) {
             throw new RuntimeException();
         }
 
         int trackIndex = -1;
         if (type == TrackType.SUBTITLE) {
-            trackIndex = mMPDParser.getSelectedTrackIndex(type);
+            trackIndex = mManifestParser.getSelectedTrackIndex(type);
         }
 
         mFetchers.put(type,
-                new RepresentationFetcher(this, representation, mPacketSources.get(type), type,
-                        nextTimeUs, mMPDParser.getPeriodTimeOffsetUs(), trackIndex));
+                new QualityLevelFetcher(this, qualityLevel, mPacketSources.get(type), type,
+                        nextTimeUs, trackIndex, mDefaultKID));
     }
 
     public Message getFetcherCallbackMessage(TrackType type) {
@@ -701,13 +592,13 @@ public final class DASHSession {
     }
 
     public boolean checkBandwidth() {
-        int[] selectedTracks = mMPDParser.getSelectedTracks();
-        int[] selectedRepresentations = mMPDParser.getSelectedRepresentations();
+        int[] selectedTracks = mManifestParser.getSelectedTracks();
+        int[] selectedRepresentations = mManifestParser.getSelectedQualityLevels();
 
         if (mRepresentationSelector.selectRepresentations(
                 mBandwidthEstimator.getEstimatedBandwidth(), selectedTracks,
                 selectedRepresentations)) {
-            mMPDParser.updateRepresentations(selectedRepresentations);
+            mManifestParser.updateQualityLevels(selectedRepresentations);
             mEventHandler.obtainMessage(MSG_CHANGE_CONFIGURATION, -1, 0).sendToTarget();
             return true;
         }
@@ -715,16 +606,11 @@ public final class DASHSession {
     }
 
     public long getDurationUs() {
-        return mMPDParser.getDurationUs();
+        return mManifestParser.getDurationUs();
     }
 
-    public long getActivePeriodEndTime() {
-        Period period = mMPDParser.getActivePeriod();
-        return period.durationUs + period.startTimeUs;
-    }
-
-    public DASHTrackInfo[] getTrackInfo() {
-        return mMPDParser.getTrackInfo();
+    public TrackInfo[] getTrackInfo() {
+        return mManifestParser.getTrackInfo();
     }
 
     public void seekTo(long timeUs) {
@@ -742,7 +628,7 @@ public final class DASHSession {
     }
 
     public TrackType selectTrack(boolean select, int index) {
-        TrackType type = mMPDParser.selectTrack(select, index);
+        TrackType type = mManifestParser.selectTrack(select, index);
 
         if (type != TrackType.UNKNOWN) {
             mEventHandler.obtainMessage(MSG_SELECT_TRACK, index, 0, type).sendToTarget();
@@ -752,7 +638,7 @@ public final class DASHSession {
     }
 
     public int getSelectedTrackIndex(TrackType type) {
-        return mMPDParser.getSelectedTrackIndex(type);
+        return mManifestParser.getSelectedTrackIndex(type);
     }
 
     public void disconnect() {
@@ -760,11 +646,6 @@ public final class DASHSession {
     }
 
     public void selectRepresentations(int trackIndex, Vector<Integer> representations) {
-        mMPDParser.selectRepresentations(trackIndex, representations);
-    }
-
-    public Statistics getStatistics() {
-        return new Statistics((int)mBandwidthEstimator.getEstimatedBandwidth(), mVideoServerIP,
-                mVideoURI);
+        mManifestParser.selectRepresentations(trackIndex, representations);
     }
 }

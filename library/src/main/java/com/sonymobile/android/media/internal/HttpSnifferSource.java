@@ -37,6 +37,7 @@ import com.sonymobile.android.media.MetaData;
 import com.sonymobile.android.media.RepresentationSelector;
 import com.sonymobile.android.media.TrackInfo;
 import com.sonymobile.android.media.internal.streaming.mpegdash.DASHSource;
+import com.sonymobile.android.media.internal.streaming.smoothstreaming.SmoothStreamingSource;
 
 public class HttpSnifferSource extends MediaSource {
 
@@ -174,6 +175,11 @@ public class HttpSnifferSource extends MediaSource {
         return url.startsWith("http://") || url.startsWith("https://");
     }
 
+    @Override
+    public boolean isStreaming() {
+        return mSource.isStreaming();
+    }
+
     private static class CallbackHandler extends Handler {
 
         private WeakReference<HttpSnifferSource> mParent;
@@ -195,6 +201,9 @@ public class HttpSnifferSource extends MediaSource {
 
                 if (DASHSource.canHandle(mime, thiz.mUrl)) {
                     thiz.mSource = new DASHSource(urlConnection,
+                            thiz.mNotify, thiz.mMaxBufferSize);
+                } else if (SmoothStreamingSource.canHandle(mime, thiz.mUrl)) {
+                    thiz.mSource = new SmoothStreamingSource(urlConnection,
                             thiz.mNotify, thiz.mMaxBufferSize);
                 } else {
                     thiz.mSource = new SimpleSource(urlConnection,
